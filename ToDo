@@ -16,6 +16,9 @@ the handler did the following:
 
 I think the results look pretty promising in a real world scenario
 
+Joshua Chamas ran some Hello World benchmarks that included Dispatch.pm - 
+the results are down at the bottom of the page...
+
 ----------------------------------------------------------------------
 using a single <Location> directive with a method handler
 
@@ -81,3 +84,41 @@ Connnection Times (ms)
 Connect:        0     0   263
 Processing:    91   724  2072
 Total:         91   724  2335
+
+
+----------------------------------------------------------------------
+----------------------------------------------------------------------
+here are Josh's benchmark results (thanks Josh!):
+
+Geoffrey Young wrote:
+> 
+> here's a patch against the bench.pl you sent...  I already knew that
+> Apache::Dispatch didn't do too well in hello world type stuff.  oh, well...
+> 
+> I tried to get a mod_perl method handler going, but it seems not to work
+> unless there is a physical .pm around as part of its internal checks...
+> 
+
+What you gave me is good.  What do you mean "didn't do too well"? 
+It screamed!  I'm only seeing a .00035 sec diff between it and a 
+normal modperl handler on my system.
+
+--Josh
+
+Test Name                 Test File    Hits/sec     Total Hits   Total Time   sec/Hits     
+------------              ------------ ------------ ------------ ------------ ------------ 
+Apache::ASP               hello.asp     410.4       24623 hits   60.00 sec    0.002437     
+Apache::Dispatch handler  dispatch/tes  658.7       39524 hits   60.00 sec    0.001518     
+Apache::Registry CGI Raw  hello_raw.re  717.3       43036 hits   60.00 sec    0.001394     
+Apache::Registry CGI.pm   hello.reg     479.2       28756 hits   60.00 sec    0.002087     
+Apache::SSI               hello.shtml   481.4       28885 hits   60.00 sec    0.002077     
+HTML static               hello.html   1183.7       50000 hits   42.24 sec    0.000845     
+HTML::Embperl             hello.epl     487.7       29266 hits   60.00 sec    0.002050     
+HTML::Mason               hello.mas     367.5       22052 hits   60.00 sec    0.002721     
+Template Toolkit          hello.tt      537.9       32275 hits   60.00 sec    0.001859     
+mod_include SSI           hello.shtml   916.6       50000 hits   54.55 sec    0.001091     
+mod_perl handler          hello.bench   856.0       50000 hits   58.41 sec    0.001168
+
+Josh's official Linux Hello World 2000 benchmark results posting can be seen at
+http://forum.swarthmore.edu/epigone/modperl/sercrerdprou/3A56F551.4EADEB43@chamas.com
+

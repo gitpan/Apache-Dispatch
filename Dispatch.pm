@@ -13,7 +13,7 @@ use Apache::ModuleConfig;
 use DynaLoader ();
 use strict;
 
-$Apache::Dispatch::VERSION = '0.08';
+$Apache::Dispatch::VERSION = '0.09';
 
 # create global hash to hold the modification times of the modules
 my %stat           = ();
@@ -49,6 +49,10 @@ sub handler {
   my $stat         = $dcfg->{_stat};
 
   my $prefix       = $dcfg->{_prefix};
+
+  my $new_location = $dcfg->{_newloc};
+
+  my $require      = $dcfg->{_require};
 
   my @parents      = $dcfg->{_isa} ? @{$dcfg->{_isa}} : ();
 
@@ -96,7 +100,10 @@ sub handler {
       "\n\t\tDispatchPrefix: ", $prefix,
       "\n\t\tDispatchStat: ", $stat,
       "\n\t\tDispatchFilter: ", $filter,
+      "\n\t\tDispatchLocation: ", 
+       $new_location ? $new_location : "Unaltered",
       "\n\t\tDispatchAUTOLOAD: ", $autoload,
+      "\n\t\tDispatchRequire: ", $require,
       "\n\t\tDispatchExtras: ", 
        (@extras ? (join ' ', @extras) : "None"),
       "\n\t\tDispatchISA: ",
@@ -108,8 +115,16 @@ sub handler {
 # create the new object
 #---------------------------------------------------------------------
   
-  my ($class, $method) = _translate_uri($r, $prefix);
+  my ($class, $method) = _translate_uri($r, $prefix, 
+                                        $new_location, $log);
   
+  unless ($class && $method) {
+    $log->info("\tclass and method could not be discovered")
+       if $Apache::Dispatch::DEBUG;
+    $log->info("Exiting Apache::Dispatch");
+    return DECLINED;
+  }
+
   my $object       = {};
 
   bless $object, $class;
@@ -125,6 +140,27 @@ sub handler {
       $log->error("\tDispatchISA did not return successfully!");
       $log->info("Exiting Apache::Dispatch");
       return DECLINED;
+    }
+  }
+
+#---------------------------------------------------------------------
+# require the module if DispatchRequire On
+#---------------------------------------------------------------------
+
+  if ($require eq "ON") {
+    $log->info("\tattempting to require $class...")
+       if $Apache::Dispatch::DEBUG > 1;
+
+    eval "require $class";
+
+    if ($@) {
+      $log->warn("\tcould not require $class: $@");
+      $log->info("Exiting Apache::Dispatch");
+      return DECLINED;
+    }
+    else {
+      $log->info("\t$class required successfully")
+       if $Apache::Dispatch::DEBUG > 1;
     }
   }
 
@@ -213,7 +249,7 @@ sub handler {
 #---------------------------------------------------------------------
 
   $log->info("\tApache::Dispatch is returning $rc")
-      if $Apache::Dispatch::DEBUG > 1;
+      if $Apache::Dispatch::DEBUG;
 
   $log->info("Exiting Apache::Dispatch");
 
@@ -231,17 +267,36 @@ sub _translate_uri {
 # this method is for internal use only
 #---------------------------------------------------------------------
 
-  my ($r, $prefix)   = @_;
+  my ($r, $prefix, $newloc, $log)   = @_;
+
+  my $location;
 
   # change all the / to :: 
   (my $class_and_method = $r->uri) =~ s!/!::!g;
 
+  if ($newloc) {
+    $log->info("\tmodifying location from ", $r->location,
+               " to $newloc")
+       if $Apache::Dispatch::DEBUG > 1;
+    ($location = $newloc) =~ s!/!::!g;
+  } 
+  else {
+    ($location = $r->location) =~ s!/!::!g;
+  }
+
   # strip off the leading and trailing :: if any
   $class_and_method  =~ s/^::|::$//g;
+  $location  =~ s/^::|::$//g;
 
   # substitute the prefix for the location
-  (my $location = $r->location) =~ s!/!!;
-  $class_and_method  =~ s/^$location/$prefix/e;
+  my $times = $class_and_method  =~ s/^\Q$location/$prefix/e;
+
+  unless ($times) {
+    $log->info("\tLocation substitution failed - uri not translated")
+       if $Apache::Dispatch::DEBUG > 1;
+  
+    return (undef, undef);
+  }
 
   my ($class, $method);
 
@@ -406,10 +461,17 @@ sub DIR_MERGE {
   my ($parent, $current) = @_;
   my %new          = (%$parent, %$current);
 
-  $new{_stat}      ||= "OFF";   # no reloading by default
-  $new{_autoload}  ||= "OFF";   # no autloading by default
+  $new{_stat}      ||= "Off";   # no reloading by default
+  $new{_autoload}  ||= "Off";   # no autloading by default
+  $new{_require}   ||= "Off";   # no require()ing by default
 
   return bless \%new, ref($parent);
+}
+
+sub DispatchLocation ($$$) {
+  my ($cfg, $parms, $arg) = @_;
+  
+  $cfg->{_newloc}  = $arg;
 }
 
 sub DispatchPrefix ($$$) {
@@ -445,6 +507,17 @@ sub DispatchStat ($$$) {
   } 
   else {
     die "Invalid DispatchStat $arg!";
+  }
+}
+
+sub DispatchRequire ($$$) {
+  my ($cfg, $parms, $arg) = @_;
+  
+  if ($arg =~ m/^(On|Off)$/i) {
+    $cfg->{_require} = uc($arg);
+  } 
+  else {
+    die "Invalid DispatchRequire $arg!";
   }
 }
 
@@ -538,19 +611,44 @@ Bar::Baz, etc...
 
   DispatchPrefix
     The base class to be substituted for the $r->location part of the
-    uri.  Applies on a per-location basis only.  
+    uri.
+
+  DispatchLocation
+    Using Apache::Dispatch from a <Directory> directive, either 
+    directly or from a .htaccess file, will _require_ the use of
+    DispatchLocation, which defines the starting location from which
+    Apache::Dispatch will start class->method() translation.
+    For example:
+
+      httpd.conf
+        DocumentRoot /usr/local/apache/htdocs
+        <Directory /usr/local/apache/htdocs/>
+          ...
+        <Directory>
+
+     .htaccess (in /usr/local/apache/htdocs/Foo)
+        SetHandler perl-script
+        PerlHandler Apache::Dispatch
+        DispatchPrefix Baz
+        DispatchLocation /Foo
+
+    This allows a request to /Foo/Bar/biff to properly map to
+    Baz::Bar->biff().  
+
+    While intended specifically for <Directory> configurations, one
+    could use DispatchLocation to further obscure uri translations
+    within <Location> sections as well by changing the part of
+    the uri that is substitued with your module.
 
   DispatchExtras
-    An optional list of extra processing to enable per-request.  They
-    may be applied on a per-server or per-location basis, and must be 
-    turned on explicitly.  If the main handler is not a valid method
-    call, the request is declined prior to the execution of any of the
-    extra methods.
+    An optional list of extra processing to enable per-request.  If
+    the main handler is not a valid method call, the request is 
+    declined prior to the execution of any of the extra methods.
 
       Pre   - eval()s Foo->pre_dispatch($r) prior to dispatching the
               uri.  The $@ of the eval is not checked in any way.
 
-      Post  - eval()s Foo->post_dispatch($r) prior to dispatching the
+      Post  - eval()s Foo->post_dispatch($r) after dispatching the
               uri.  The $@ of the eval is not checked in any way.
 
       Error - If the main handler returns other than OK then 
@@ -563,11 +661,22 @@ Bar::Baz, etc...
               With error_dispatch() disabled, the return status of the
               the main handler is returned to the client.
 
+  DispatchRequire
+    An optional directive that enables require()ing of the module that
+    is the result of the uri to class->method translation.  This allows
+    your configuration to be a bit more dynamic, but also decreases
+    security somewhat.  And don't forget that you really should be
+    pre-loading frequently used modules in the parent process to reduce
+    overhead - DispatchRequire is a directive of conveinence.
+
+      On    - require() the module
+
+      Off   - Do not require() the module (Default)
+
   DispatchStat
     An optional directive that enables reloading of the module that is
     the result of the uri to class->method translation, similar to
-    Apache::Registry, Apache::Reload, or Apache::StatINC.  It applies
-    on a per-server or per-location basis.
+    Apache::Registry, Apache::Reload, or Apache::StatINC.
 
       On    - Test the called package for modification and reload on
               change
@@ -589,16 +698,14 @@ Bar::Baz, etc...
     
   DispatchISA
     An optional list of parent classes you want your dispatched class
-    to inherit from. It may be applied on a per-server or per-location
-    basis.
+    to inherit from.
 
   DispatchFilter 
     If you have Apache::Filter 1.013 or above installed, you can take
     advantage of other Apache::Filter aware modules.  Please see the
-    section on FILTERING below.  DispatchFilter may be applied on a 
-    per-location basis.  In keeping with Apache::Filter standards,
-    PerlSetVar Filter has the same effect as DispatchFilter but with
-    lower precedence.
+    section on FILTERING below.  In keeping with Apache::Filter
+    standards, PerlSetVar Filter has the same effect as DispatchFilter
+    but with lower precedence.
 
       On    - make the output of your module Apache::Filter aware
 
@@ -633,7 +740,7 @@ or get the Apache request object directly via
   }
 
 If you want to use the handler unmodified outside of Apache::Dispatch,
-you must do two things:
+you must do three things:
 
   prototype your handler:
 
@@ -649,9 +756,16 @@ you must do two things:
       PerlHandler Bar->dispatch_baz
     </Location>
 
+  pre-load your module:
+    PerlModule Bar
+      or
+    PerlRequire startup.pl
+    # where startup.pl contains
+    # use Bar;
+
 That's it - now the handler can be swapped in and out of Dispatch 
-without further modification.  All that remains to be done is
-proper configuration of httpd.conf.
+without further modification.  See the Eagle book on method handlers
+for more details.
 
 =head1 FILTERING
 
@@ -707,13 +821,6 @@ is, unless Foo::Bar is your DispatchPrefix, in which case it will
 work but /Foo/Bar/Baz will not, etc).  Explicit calls to /Foo/index
 follow the normal dispatch rules.
 
-There is no require()ing or use()ing of the packages or methods prior
-to their use as a PerlHandler.  This means that if you try to dispatch
-a method without a PerlModule directive or use() entry in your 
-startup.pl you probably will not meet with much success.  This adds a
-bit of security and reminds us we should be pre-loading that code in
-the parent process anyway...
-
 If the uri can be dispatched but contains anything other than
 [a-zA-Z0-9_/-] Apache::Dispatch declines to handle the request.
 
@@ -749,7 +856,7 @@ Geoffrey Young <geoff@cpan.org>
 
 =head1 COPYRIGHT
 
-Copyright 2000 Geoffrey Young - all rights reserved.
+Copyright 2001 Geoffrey Young - all rights reserved.
 
 This library is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself.

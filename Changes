@@ -67,3 +67,15 @@ Revision history for Perl extension Apache::Dispatch
   - changed all directives so that they can be used from within
     .htaccess files (suggested by Matt Sergeant)
   - removed extraneous SERVER_CREATE and SERVER_MERGE sections
+
+0.09  01.31.2001
+  - added DispatchLocation - now .htaccess configs should work (really)
+    thanks yet again to Matt Sergeant
+  - documented DispatchLocation
+  - added DispatchRequire (suggested by Vivek Khera, and many others
+    I can't remember specifically)
+  - documented DispatchRequire
+  - fixed DispatchExtras Post documentation (Vivek Khera)
+  - Apache::Dispatch was added to Joshua Chamas' benchmarking
+    stuff - see ToDo for some results
+

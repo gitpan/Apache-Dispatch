@@ -49,6 +49,22 @@ my @directives = (
     req_override => 'OR_ALL', },
 
   #------------------------------------------------------------------
+  # DispatchLocation allows you to redefine the <Location>
+  #------------------------------------------------------------------
+  { name         => 'DispatchLocation',
+    errmsg       => 'a location to replace the current <Location>',
+    args_how     => 'TAKE1',
+    req_override => 'OR_ALL', },
+
+  #------------------------------------------------------------------
+  # DispatchRequire require()s the class
+  #------------------------------------------------------------------
+  { name         => 'DispatchRequire',
+    errmsg       => 'choose one of On or Off',
+    args_how     => 'TAKE1',
+    req_override => 'OR_ALL', },
+
+  #------------------------------------------------------------------
   # DispatchFilter makes the dispatched handler Apache::Filter aware
   #------------------------------------------------------------------
   { name         => 'DispatchFilter',
