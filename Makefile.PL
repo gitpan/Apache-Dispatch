@@ -14,7 +14,7 @@ my @directives = (
   { name         => 'DispatchPrefix',
     errmsg       => 'a class to be used as the base class', 
     args_how     => 'TAKE1',
-    req_override => 'ACCESS_CONF', },
+    req_override => 'OR_ALL', },
 
   #------------------------------------------------------------------
   # DispatchExtras defines the extra dispatch methods to enable
@@ -22,7 +22,7 @@ my @directives = (
   { name         => 'DispatchExtras',
     errmsg       => 'choose any of: Pre, Post, or Error', 
     args_how     => 'ITERATE',
-    req_override => 'RSRC_CONF | ACCESS_CONF', },
+    req_override => 'OR_ALL', },
 
   #------------------------------------------------------------------
   # DispatchStat enables module testing and subsequent reloading
@@ -30,7 +30,7 @@ my @directives = (
   { name         => 'DispatchStat',
     errmsg       => 'choose one of On, Off, or ISA',
     args_how     => 'TAKE1',
-    req_override => 'RSRC_CONF | ACCESS_CONF', },
+    req_override => 'OR_ALL', },
 
   #------------------------------------------------------------------
   # DispatchAUTOLOAD defines AutoLoader behavior
@@ -38,7 +38,7 @@ my @directives = (
   { name         => 'DispatchAUTOLOAD',
     errmsg       => 'choose one of On or Off',
     args_how     => 'TAKE1',
-    req_override => 'RSRC_CONF | ACCESS_CONF', },
+    req_override => 'OR_ALL', },
 
   #------------------------------------------------------------------
   # DispatchISA is a list of modules your module should inherit from
@@ -46,7 +46,7 @@ my @directives = (
   { name         => 'DispatchISA',
     errmsg       => 'a list of parent modules',
     args_how     => 'ITERATE',
-    req_override => 'RSRC_CONF | ACCESS_CONF', },
+    req_override => 'OR_ALL', },
 
   #------------------------------------------------------------------
   # DispatchFilter makes the dispatched handler Apache::Filter aware
@@ -54,7 +54,7 @@ my @directives = (
   { name         => 'DispatchFilter',
     errmsg       => 'choose one of On or Off',
     args_how     => 'TAKE1',
-    req_override => 'ACCESS_CONF', },
+    req_override => 'OR_ALL', },
 );
 
 command_table(\@directives);

@@ -62,3 +62,8 @@ Revision history for Perl extension Apache::Dispatch
   - made mod_perl 1.2401 required due to DIR_MERGE memory leak in 
     mod_perl < 1.24
 
+0.08  12.04.2000
+  - minor documentation additions and fixups
+  - changed all directives so that they can be used from within
+    .htaccess files (suggested by Matt Sergeant)
+  - removed extraneous SERVER_CREATE and SERVER_MERGE sections

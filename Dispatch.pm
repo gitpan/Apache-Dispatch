@@ -13,7 +13,7 @@ use Apache::ModuleConfig;
 use DynaLoader ();
 use strict;
 
-$Apache::Dispatch::VERSION = '0.07';
+$Apache::Dispatch::VERSION = '0.08';
 
 # create global hash to hold the modification times of the modules
 my %stat           = ();
@@ -39,22 +39,20 @@ sub handler {
   
   my $dcfg         = Apache::ModuleConfig->get($r, 
                                                __PACKAGE__);
-  my $scfg         = Apache::ModuleConfig->get($r->server, 
-                                               __PACKAGE__);
 
   my $filter       = $dcfg->{_filter}         ||
                      $r->dir_config('Filter') ||
                      "Off";
 
-  my $autoload     = $dcfg->{_autoload} || $scfg->{_autoload};
+  my $autoload     = $dcfg->{_autoload};
 
-  my $stat         = $dcfg->{_stat} || $scfg->{_stat};
+  my $stat         = $dcfg->{_stat};
 
-  my @parents      = $dcfg->{_isa} ? @{$dcfg->{_isa}} :
-                     $scfg->{_isa} ? @{$scfg->{_isa}} : ();
+  my $prefix       = $dcfg->{_prefix};
 
-  my @extras       = $dcfg->{_extras} ? @{$dcfg->{_extras}} :
-                     $scfg->{_extras} ? @{$scfg->{_extras}} : ();
+  my @parents      = $dcfg->{_isa} ? @{$dcfg->{_isa}} : ();
+
+  my @extras       = $dcfg->{_extras} ? @{$dcfg->{_extras}} : ();
 
   my $log          = $r->server->log;
 
@@ -95,7 +93,7 @@ sub handler {
 
   if ($Apache::Dispatch::DEBUG > 1) {
     $log->info("\tapplying the following dispatch rules:",
-      "\n\t\tDispatchPrefix: ", $dcfg->{_prefix},
+      "\n\t\tDispatchPrefix: ", $prefix,
       "\n\t\tDispatchStat: ", $stat,
       "\n\t\tDispatchFilter: ", $filter,
       "\n\t\tDispatchAUTOLOAD: ", $autoload,
@@ -110,7 +108,7 @@ sub handler {
 # create the new object
 #---------------------------------------------------------------------
   
-  my ($class, $method) = _translate_uri($r, $dcfg->{_prefix});
+  my ($class, $method) = _translate_uri($r, $prefix);
   
   my $object       = {};
 
@@ -397,23 +395,6 @@ sub _new {
   return bless {}, shift;
 }
 
-sub SERVER_CREATE {
-  my $class        = shift;
-  my $self         = $class->_new;
-
-  return $self;
-}
-
-sub SERVER_MERGE {
-  my ($parent, $current) = @_;
-  my %new          = (%$parent, %$current);
-
-  $new{_stat}      ||= "OFF";   # no reloading by default
-  $new{_autoload}  ||= "OFF";   # no autoloading by default
-
-  return bless \%new, ref($parent);
-}
-
 sub DIR_CREATE {
   my $class        = shift;
   my $self         = $class->_new;
@@ -544,13 +525,13 @@ with a slurry of <Location> tags.
   the results are the same as if your httpd.conf looked like:
     <Location /Foo>
       SetHandler perl-script
-      PerlHandler Bar::dispatch_baz
+      PerlHandler Bar->dispatch_baz
     </Location>
 
 but with the additional security of protecting the class name from
 the browser and keeping the method name from being called directly.
 Because any class under the Bar:: hierarchy can be called, one
-<Location> directive is be able to handle all the methods of Bar,
+<Location> directive is able to handle all the methods of Bar,
 Bar::Baz, etc...
 
 =head1 CONFIGURATION DIRECTIVES
@@ -628,8 +609,8 @@ Bar::Baz, etc...
 Migrating to Apache::Dispatch is relatively painless - it requires
 only a few minor code changes.  The good news is that once you adapt
 code to work with Dispatch, it can be used as a conventional mod_perl
-handler, requiring only a few special httpd.conf considerations.
-Below are a few things that require attention.
+method handler, requiring only a few considerations.  Below are a few
+things that require attention.
 
 In the interests of security, all handler methods must be prefixed
 with 'dispatch_', which is added to the uri behind the scenes.  Unlike
@@ -650,6 +631,27 @@ or get the Apache request object directly via
   sub dispatch_bar {
     my $r     = Apache->request;
   }
+
+If you want to use the handler unmodified outside of Apache::Dispatch,
+you must do two things:
+
+  prototype your handler:
+
+    sub dispatch_baz ($$) {
+      my $self  = shift;
+      my $r     = shift;
+    }
+
+  change your httpd.conf entry:
+
+    <Location /Foo>
+      SetHandler perl-script
+      PerlHandler Bar->dispatch_baz
+    </Location>
+
+That's it - now the handler can be swapped in and out of Dispatch 
+without further modification.  All that remains to be done is
+proper configuration of httpd.conf.
 
 =head1 FILTERING
 
