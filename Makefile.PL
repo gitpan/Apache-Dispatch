@@ -12,7 +12,7 @@ my @directives = (
   # DispatchPrefix defines the base class for a given <Location>
   #------------------------------------------------------------------
   { name         => 'DispatchPrefix',
-    errmsg       => 'define a class to be used as the base class', 
+    errmsg       => 'a class to be used as the base class', 
     args_how     => 'TAKE1',
     req_override => 'ACCESS_CONF', },
 

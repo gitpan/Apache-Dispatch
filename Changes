@@ -31,3 +31,7 @@ Revision history for Perl extension Apache::Dispatch
         - cleaned up Makefile.PL
         - borrowed from Apache::StatINC and added DispatchStat 
           directive (suggested by Matt Sergeant and Dan Campbell)
+
+0.05  8.11.2000
+        - make several changes to _stat - should be more stable now
+        - added AUTOLOAD support

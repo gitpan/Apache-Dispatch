@@ -2,14 +2,22 @@ package Foo::Bar;
 use Apache::Constants qw( OK SERVER_ERROR );
 use strict;
 
-@Foo::Bar::ISA = qw(Foo);
+@Foo::Bar::ISA = qw(Foo::Foo);
 
 sub dispatch_baz {
     my $r = Apache->request;
-    $r->send_http_header('text/plain');
-    $r->print("Foo::Bar->dispatch_baz()");
     print STDERR "Foo->dispatch_baz()\n";
+    $Foo::Foo::output = "pid $$";
     return OK;
+}
+
+sub post_dispatch {
+  my $class = shift;
+  my $r = shift;
+  # delay printing headers until all processing is done
+  $r->send_http_header('text/plain');
+  $r->print($Foo::Foo::output);
+  print STDERR "Foo->post_dispatch()\n";
 }
 
 1;
@@ -29,7 +37,7 @@ here is a sample httpd.conf entry
   </Location>
 
 once you install it, you should be able to go to
-http://localhost/Test/foo
+http://localhost/Test/Foo/foo
 or
-http://localhost/Test/Bar/foo
+http://localhost/Test/Foo/Bar/foo
 etc, and get some results

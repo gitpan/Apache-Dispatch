@@ -26,7 +26,7 @@ it as a PerlHandler.  Basically, this allows you to call PerlHandlers
 as you would CGI scripts without having to load your httpd.conf with
 a slurry of <Location> tags.
 
-=head1 EXAMPLE
+EXAMPLE
 
   in httpd.conf
 
@@ -86,16 +86,15 @@ CONFIGURATION DIRECTIVES
     functionality is available with Apache::StatINC for development
     DispatchStat does not check all of the modules in %INC.  This cuts
     down on overhead, making it a reasonable alternative to recycling
-    the server in production.
+    the server.
 
       On    - Test the called package for modification and reload
               on change
 
-      Off   - Do not test the package
+      Off   - Do not test or reload the package
 
       ISA   - Test the called package and all other packages in the
-              called packages @ISA and reload on change
-
+              called package's @ISA and reload on change
 
 SPECIAL CODING GUIDELINES
 
@@ -126,6 +125,11 @@ will only translate to /Foo/index at the highest level - that is,
 when just the location is specified.  Meaning /Foo/Baz/index will call
 Bar::Baz->dispatch_index, but /Foo/Baz will try to call Bar->Baz().
 
+Support for AUTOLOAD has been enabled, but requires special care.
+Please take the time to read the camel book on using AUTOLOAD with 
+can() and subroutine declarations.  There is also a small note in
+eg/Foo.pm.  Consider the support experimental for now.
+
 There is no require()ing or use()ing of the packages or methods prior
 to their use as a PerlHandler.  This means that if you try to dispatch
 a method without a PerlModule directive or use() entry in your 
@@ -144,14 +148,13 @@ information set your apache LogLevel directive above info level.
 
 This is alpha software, and as such has not been tested on multiple
 platforms or environments for security, stability or other concerns.
-It requires PERL_DIRECTIVE_HANDLERS=1, PERL_METHOD_HANDLERS=1,
-PERL_LOG_API=1, PERL_HANDLER=1, and maybe other hooks to function 
-properly.
+It requires PERL_DIRECTIVE_HANDLERS=1, PERL_LOG_API=1, PERL_HANDLER=1,
+and maybe other hooks to function properly.
 
 FEATURES/BUGS
 
 If a module fails reload under DispatchStat, Apache::Dispatch declines
-the request.
+the request.  This might change to SERVER_ERROR in the future...
 
 SEE ALSO
 

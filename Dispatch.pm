@@ -9,14 +9,12 @@ package Apache::Dispatch;
 use Apache::Constants qw( OK DECLINED SERVER_ERROR);
 use Apache::Log;
 use Apache::ModuleConfig;
-use Apache::Symbol qw(undef_functions);
 use DynaLoader ();
 use strict;
 
-$Apache::Dispatch::VERSION = '0.04';
+$Apache::Dispatch::VERSION = '0.05';
 
-# create hash to hold the modification times of the modules
-# and mark the time this module was loaded
+# create global hash to hold the modification times of the modules
 my %stat           = ();
 
 if ($ENV{MOD_PERL}) {
@@ -53,6 +51,7 @@ sub handler {
      if $Apache::Dispatch::DEBUG;
 
   # if the uri contains any characters we don't like, bounce
+  # is this necessary?
   if ($uri =~ m![^\w/-]!) {
     $log->info("\t$uri has bogus characters...")
        if $Apache::Dispatch::DEBUG;
@@ -62,12 +61,6 @@ sub handler {
 
   my $dcfg         = Apache::ModuleConfig->get($r);
   my $scfg         = Apache::ModuleConfig->get($r->server);
-
-  unless ($dcfg->{_prefix}) {
-    $log->error("\tDispatchPrefix is not defined!");
-    $log->info("Exiting Apache::Dispatch");
-    return DECLINED;
-  }
 
   if ($Apache::Dispatch::DEBUG > 1) {
     $log->info("\tapplying the following dispatch rules:" . 
@@ -96,7 +89,7 @@ sub handler {
   my $stat = $dcfg->{_stat} || $scfg->{_stat};
 
   if ($stat eq "ON") {
-    $rc = _stat($class, $log);
+    my $rc = _stat($class, $log);
 
     unless ($rc) {
       $log->error("\tDispatchStat did not return successfully!");
@@ -113,7 +106,7 @@ sub handler {
     push @packages, $class;
 
     foreach my $package (@packages) {
-      $rc = _stat($package, $log);
+      my $rc = _stat($package, $log);
 
       unless ($rc) {
         $log->error("\tDispatchStat did not return successfully!");
@@ -182,6 +175,9 @@ sub handler {
 # wrap up...
 #---------------------------------------------------------------------
 
+  $log->info("\tApache::Dispatch is returning $rc")
+      if $Apache::Dispatch::DEBUG > 1;
+
   $log->info("Exiting Apache::Dispatch");
 
   return $rc;
@@ -229,12 +225,12 @@ sub _check_dispatch {
 
   my ($object, $method, $log) = @_;
 
-  my $class = ref($object);
+  my $class = ref($object) if $Apache::Dispatch::DEBUG > 1;
 
   $log->info("\tchecking the validity of $class->$method...")
      if $Apache::Dispatch::DEBUG > 1;
 
-  my $coderef      = $object->can($method);
+  my $coderef     = $object->can($method) || $object->can("AUTOLOAD");
 
   if ($coderef && $Apache::Dispatch::DEBUG > 1) {
     $log->info("\t$class->$method is a valid method call");
@@ -253,51 +249,46 @@ sub _stat {
 
   my ($class, $log) = @_;
 
-  # we sometimes get Argument isn't numeric warnings, but things
-  # still seem to work ok, so turn off warnings for now...
-  local $^W;
-
-  (my $module = $class) =~ s!::!/!;
+  (my $module = $class) =~ s!::!/!g;
 
   $module          = "$module.pm";
 
   $stat{$module} = $^T unless $stat{$module};
 
   if ($INC{$module}) {
-    $log->info("\tchecking $module for reload in pid $$")
+    $log->info("\tchecking $module for reload in pid $$...")
       if $Apache::Dispatch::DEBUG > 1;
 
     my $mtime = (stat $INC{$module})[9];
 
     unless (defined $mtime && $mtime) {
-    $log->info("\tcannot find $module!")
-      if $Apache::Dispatch::DEBUG;
-    return 1;
+      $log->warn("Apache::Dispatch cannot find $module!");
+      return 1;
     }
   
     if ( $mtime > $stat{$module} ) {
-      $class->Apache::Symbol::undef_functions;
+      # turn off warnings for this bit...
+      local $^W;
 
       delete $INC{$module};
       eval { require $module };
   
       if ($@) {
-        $log->error("\t$module reload failed! $@");
+        $log->error("Apache::Dispatch: $module failed reload! $@");
         return undef;
       }
       elsif ($Apache::Dispatch::DEBUG) {
-        $log->info("\t$module reloaded for pid $$...")
+        $log->info("\t$module reloaded")
       }
       $stat{$module} = $mtime;
     }
     else {
-      $log->info("\t$module not modified in pid $$")
+      $log->info("\t$module not modified")
         if $Apache::Dispatch::DEBUG > 1;
-
     }
   }
   else {
-    $log->error("\t$module not in \%INC!");
+    $log->warn("Apache::Dispatch: $module not in \%INC!");
   }
 
   return 1;
@@ -321,7 +312,7 @@ sub SERVER_MERGE {
   my ($parent, $current) = @_;
   my %new = (%$parent, %$current);
 
-  $new{_stat} ||= "OFF";   # no stat() by default;
+  $new{_stat} ||= "OFF";   # no reloading by default;
 
   return bless \%new, ref($parent);
 }
@@ -337,7 +328,7 @@ sub DIR_MERGE {
   my ($parent, $current) = @_;
   my %new = (%$parent, %$current);
 
-  $new{_stat} ||= "OFF";   # no stat() by default;
+  $new{_stat} ||= "OFF";   # no reloading by default;
 
   return bless \%new, ref($parent);
 }
@@ -466,16 +457,15 @@ Bar::Baz, etc...
     functionality is available with Apache::StatINC for development
     DispatchStat does not check all of the modules in %INC.  This cuts
     down on overhead, making it a reasonable alternative to recycling
-    the server in production.
+    the server.
 
       On    - Test the called package for modification and reload
               on change
 
-      Off   - Do not test the package
+      Off   - Do not test or reload the package
 
       ISA   - Test the called package and all other packages in the
-              called packages @ISA and reload on change
-
+              called package's @ISA and reload on change
 
 =head1 SPECIAL CODING GUIDELINES
 
@@ -506,6 +496,11 @@ will only translate to /Foo/index at the highest level - that is,
 when just the location is specified.  Meaning /Foo/Baz/index will call
 Bar::Baz->dispatch_index, but /Foo/Baz will try to call Bar->Baz().
 
+Support for AUTOLOAD has been enabled, but requires special care.
+Please take the time to read the camel book on using AUTOLOAD with 
+can() and subroutine declarations.  There is also a small note in
+eg/Foo.pm.  Consider the support experimental for now.
+
 There is no require()ing or use()ing of the packages or methods prior
 to their use as a PerlHandler.  This means that if you try to dispatch
 a method without a PerlModule directive or use() entry in your 
@@ -524,14 +519,13 @@ information set your apache LogLevel directive above info level.
 
 This is alpha software, and as such has not been tested on multiple
 platforms or environments for security, stability or other concerns.
-It requires PERL_DIRECTIVE_HANDLERS=1, PERL_METHOD_HANDLERS=1,
-PERL_LOG_API=1, PERL_HANDLER=1, and maybe other hooks to function 
-properly.
+It requires PERL_DIRECTIVE_HANDLERS=1, PERL_LOG_API=1, PERL_HANDLER=1,
+and maybe other hooks to function properly.
 
 =head1 FEATURES/BUGS
 
 If a module fails reload under DispatchStat, Apache::Dispatch declines
-the request.
+the request.  This might change to SERVER_ERROR in the future...
 
 =head1 SEE ALSO
 
