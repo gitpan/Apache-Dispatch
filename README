@@ -1,0 +1,131 @@
+NAME
+
+Apache::Dispatch - call PerlHandlers with the ease of CGI
+
+SYNOPSIS
+
+httpd.conf:
+
+  PerlModule Apache::Dispatch
+  PerlFixupHandler Apache::Dispatch
+
+  DispatchMode Safe
+  DispatchMethod Handler
+  DispatchAllow Custom
+  DispatchDeny Apache Protected
+
+DESCRIPTION
+
+Apache::Dispatch translates $r->uri into a class and method and runs
+it as a PerlHandler.  Basically, this allows you to call PerlHandlers
+as you would CGI scripts - from the browser - without having to load
+your httpd.conf with a slurry of <Location> tags.
+
+EXAMPLE
+
+in httpd.conf:
+
+  PerlModule Apache::Dispatch
+  PerlFixupHandler Apache::Dispatch
+
+  DispatchMode Safe
+  DispatchMethod Handler
+  DispatchAllow Test
+
+in browser:
+  http://localhost/Foo
+
+the results are the same as if your httpd.conf looked like:
+  <Location /Foo>
+     SetHandler perl-script
+     PerlHandler Foo
+  </Location>
+
+CONFIGURATION
+
+All configuration directives apply on a per-server basis. 
+Virtual Hosts inherit any directives from the main server or can
+delcare their own.
+
+  DispatchMode    - Safe:       allow only those methods whose
+                                namespace is explitily allowed by 
+                                DispatchAllow and explitily not
+                                denied by DispatchDeny
+
+                    Brave:      allow only those methods whose
+                                namespace is explitily not denied by 
+                                DispatchDeny 
+
+                    Foolish:    allow any method
+
+  DispatchMethod  - Handler:    assume the method name is handler(),
+                                meaning that /Foo/Bar becomes
+                                Foo::Bar->handler()
+
+                    Subroutine: assume the method name is the last
+                                part of the uri - /Foo/Bar becomes
+                                Foo->Bar()
+
+                    Determine:  the method may either be handler() or
+                                the last part of the uri.  the last
+                                part is checked first, so  this has
+                                the additional benefit of allowing
+                                both /Foo/Bar/handler and /Foo/Bar to
+                                to call Foo::Bar::handler().
+                                of course, if Foo->Bar() exists, that
+                                will be called since it would be found
+                                first.
+
+  DispatchAllow   - a list of namespaces allowed execution according
+                    to the above rules
+
+  DispatchDeny    - a list of namespaces denied execution according
+                    to the above rules
+
+NOTES
+
+Apache::Dispatch tries to be a bit intelligent about things.  If by
+the time the uri reaches the fixup phase it can be mapped to a real
+file, directory, or <Location> tag, Apache::Dispatch declines the
+request.
+
+DispatchDeny always includes the following namespaces:
+  AUTOLOAD
+  CORE
+  SUPER
+  UNIVERSAL
+
+Like everything in perl, the package names are case sensitive relative
+to $r->uri.
+
+Verbose debugging is enabled by setting $Apache::Dispatch::DEBUG=1.
+Very verbose debugging is enabled at 2.  To turn off all debug
+information set your apache LogLevel directive above info level.
+
+This is alpha software, and as such has not been tested on multiple
+platforms or environments.  It requires PERL_INIT=1, PERL_LOG_API=1,
+and maybe other hooks to function properly.
+
+FEATURES/BUGS
+
+DispatchDeny and DispatchAllow work, but not quite the way I want.
+For instance, DispatchDeny Custom will deny to Customer:: methods,
+while DispatchAllow Custom will allow Custom::Filter->handler() and
+Custom->filter(), but deny Customer:: methods.  I think DistpatchAllow
+has the proper behavior, but DispatchDeny may need to be changed.
+Input is welcome.
+
+SEE ALSO
+
+perl(1), mod_perl(1), Apache(3), Apache::ModuleConfig(3)
+
+AUTHOR
+
+Geoffrey Young <geoff@cpan.org>
+
+COPYRIGHT
+
+Copyright 2000 Geoffrey Young - all rights reserved.
+
+This library is free software; you can redistribute it and/or
+modify it under the same terms as Perl itself.

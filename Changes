@@ -1,0 +1,8 @@
+Revision history for Perl extension Apache::Dispatch
+
+0.01  6.28.2000
+	- original version
+        - many kudos and thanks to:
+            Vivek Khera
+            Matt Sergeant
+          for the initial ideas and impetus
