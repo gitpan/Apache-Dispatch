@@ -1,0 +1,13 @@
+cache method calls as valid methods if seen previously to avoid can()
+overhead...
+
+DispatchDeny and DispatchAllow work, but not quite the way I want.
+For instance, DispatchDeny Custom will deny to Customer:: methods,
+while DispatchAllow Custom will allow Custom::Filter->handler() and
+Custom->filter(), but deny Customer:: methods.  I think DistpatchAllow
+has the proper behavior, but DispatchDeny may need to be changed.
+Input is welcome.
+
+create a / => dispatch_index() mapping
+
+test suite

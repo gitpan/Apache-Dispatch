@@ -1,8 +1,18 @@
 Revision history for Perl extension Apache::Dispatch
 
-0.01  6.28.2000
+0.01  7.28.2000
 	- original version
         - many kudos and thanks to:
             Vivek Khera
             Matt Sergeant
           for the initial ideas and impetus
+
+0.02  8.1.2000
+        - thanks again to Matt Sergeant for input not limited to
+          the following valuable suggestions
+            o add DispatchBase for dispatching on a protected,
+              per-location basis
+            o add DispatchMethod Prefix for protecting methods
+              behind a dispatch_ prepend
+        - changed behavior of directory and server merges
+        - updated the documentation

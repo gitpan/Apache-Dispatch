@@ -12,7 +12,7 @@ use Apache::ModuleConfig;
 use DynaLoader ();
 use strict;
 
-$Apache::Dispatch::VERSION = '0.01';
+$Apache::Dispatch::VERSION = '0.02';
 
 if ($ENV{MOD_PERL}) {
   no strict;
@@ -36,8 +36,7 @@ sub handler {
 
   my $uri          = $r->uri;
   
-  my $rc           = undef;
-  my $dispatch     = undef;
+  my ($rc, $dispatch, $method, $coderef) = undef;
 
 #---------------------------------------------------------------------
 # do some preliminary stuff...
@@ -48,15 +47,22 @@ sub handler {
   $log->info("\tchecking $uri for possible dispatch...")
      if $Apache::Dispatch::DEBUG;
 
-  # don't try to dispatch a real file, directory, or location
-  if (-e $r->finfo || -d $r->finfo || $r->location) {
+  # DispatchBase and DispatchMethod are per-directory directives
+  # DispatchMode, DispatchAllow, and DispatchDeny are per-server
+  my $dcfg         = Apache::ModuleConfig->get($r);
+  my $scfg         = Apache::ModuleConfig->get($r->server);
+
+  # don't try to dispatch a real file, directory, or location other
+  # than one explicity turned on by DispatchBase
+  if (-e $r->finfo || -d $r->finfo || 
+        ($r->location && !$dcfg->{_base})) {
     $log->info("\t$uri seems to really exist...")
        if $Apache::Dispatch::DEBUG;
     $log->info("Exiting Apache::Dispatch");
     return DECLINED;
   }
 
-  # if the uri contains any characters we don't like, forget about it
+  # if the uri contains any characters we don't like, bounce
   if ($uri =~ m![^\w/-]!) {
     $log->info("\t$uri has bogus characters...")
        if $Apache::Dispatch::DEBUG;
@@ -64,100 +70,113 @@ sub handler {
     return DECLINED;
   }
 
-
 #---------------------------------------------------------------------
-# get the configuration directives
-#---------------------------------------------------------------------
-
-  my $cfg          = Apache::ModuleConfig->get($r->server);
-
-  if ($Apache::Dispatch::DEBUG > 1) {
-    $log->info("\tapplying the following dispatch rules:" . 
-               "\n\t\tDispatchDeny: " . (join ' ', @{$cfg->{_deny}}) . 
-               "\n\t\tDispatchAllow: " . (join ' ', @{$cfg->{_allow}}) .
-               "\n\t\tDispatchMethod: " . $cfg->{_method} .
-               "\n\t\tDispatchMode: " . $cfg->{_mode});
-  }
-
-  my @allow        = @{$cfg->{_allow}};
-  my @deny         = @{$cfg->{_deny}};
-  my $method       = $cfg->{_method};
-  my $mode         = $cfg->{_mode};
-
-#---------------------------------------------------------------------
-# first, translate the uri into the proper method call
+# find the proper base class and apply the appropriate dispatch rules
 #---------------------------------------------------------------------
 
   # change all the / to :: 
-  (my $base        = $uri) =~ s!/!::!g;
+  (my $base      = $uri) =~ s!/!::!g;
 
-  # now, strip off the leading ::, if any
-  $base            =~ s/^:://;
+  # strip off the leading and trailing :: if any
+  $base          =~ s/^::|::$//g;
 
-  # and the trailing ::, if any
-  $base            =~ s/::$//;
+  if ($r->location) {
+  #-------------------------------------------------------------------
+  # we are within a <Location> containing DispatchBase
+  #-------------------------------------------------------------------
 
-#---------------------------------------------------------------------
-# apply the allow and deny rules to the base 
-#---------------------------------------------------------------------
+    if ($Apache::Dispatch::DEBUG > 1) {
+      $log->info("\tapplying the following dispatch rules:" . 
+         "\n\t\tDispatchMethod: " . $dcfg->{_method} .
+         "\n\t\tDispatchBase: " . $dcfg->{_base});
+    } 
 
-  if ($mode eq "SAFE") {
-    $rc            = _check_deny($base, $log, @deny);
-    
-    if ($rc) {
-      $log->info("\t$base denied by DispatchDeny")
-         if $Apache::Dispatch::DEBUG;
-      $log->info("Exiting Apache::Dispatch");
+    (my $location = $r->location) =~ s!/!!;
+    $base          =~ s/^$location/$dcfg->{_base}/e;
+
+    $method        = $dcfg->{_method};
+
+    unless ($base =~ m/::/) {
+      $log->info("\tnull dispatch not allowed with DispatchBase...")
+        if $Apache::Dispatch::DEBUG;
+     $log->info("Exiting Apache::Dispatch");
       return DECLINED;
+    }
+  }
+  else {
+  #-------------------------------------------------------------------
+  # we are outside a <Location> containing DispatchBase
+  #-------------------------------------------------------------------
+    if ($Apache::Dispatch::DEBUG > 1) {
+      $log->info("\tapplying the following dispatch rules:" . 
+         "\n\t\tDispatchDeny: " . (join ' ', @{$scfg->{_deny}}) . 
+         "\n\t\tDispatchAllow: " . (join ' ', @{$scfg->{_allow}}) .
+         "\n\t\tDispatchMethod: " . $scfg->{_method} .
+         "\n\t\tDispatchMode: " . $scfg->{_mode});
+    }
+
+    $method        = $scfg->{_method};
+
+    #-----------------------------------------------------------------
+    # apply the allow and deny rules to the base 
+    #-----------------------------------------------------------------
+    if ($scfg->{_mode} eq "SAFE") {
+      $rc          = _check_deny($base, $log, @{$scfg->{_deny}});
+    
+      if ($rc) {
+        $log->info("\t$base denied by DispatchDeny")
+          if $Apache::Dispatch::DEBUG;
+        $log->info("Exiting Apache::Dispatch");
+        return DECLINED;
+      }
+      else {
+        $rc        = _check_allow($base, $log, @{$scfg->{_allow}});
+      }
+  
+      unless ($rc) {
+        $log->info("\t$base not permitted by DispatchAllow")
+          if $Apache::Dispatch::DEBUG;
+        $log->info("Exiting Apache::Dispatch");
+        return DECLINED;
+      }
     }
     else {
-      $rc          = _check_allow($base, $log, @allow);
-    }
-  
-    unless ($rc) {
-      $log->info("\t$base not permitted by DispatchAllow")
-        if $Apache::Dispatch::DEBUG;
-      $log->info("Exiting Apache::Dispatch");
-      return DECLINED;
-    }
+      # Brave mode
+      $rc          = _check_deny($base, $log, @{$scfg->{_deny}});
 
-  }
-  elsif ($mode eq "BRAVE") {
-    $rc            = _check_deny($base, $log, @deny);
-
-    if ($rc) {
-      $log->info("\t$base denied by DispatchDeny")
-         if $Apache::Dispatch::DEBUG;
-      $log->info("Exiting Apache::Dispatch");
-      return DECLINED;
+      if ($rc) {
+        $log->info("\t$base denied by DispatchDeny")
+          if $Apache::Dispatch::DEBUG;
+        $log->info("Exiting Apache::Dispatch");
+        return DECLINED;
+      }
     }
   }
-
-  # nothing to check for fools...
 
 #---------------------------------------------------------------------
-# now, try to determine the correct method to call
+# now, try to determine the correct method to dispatch
 #---------------------------------------------------------------------
 
   if ($method eq "HANDLER") {
     $dispatch      = "$base->handler";
-    $rc            = _check_method($dispatch, $log);
+    $coderef       = _check_dispatch($dispatch, $log);
   }        
-  elsif ($method eq "SUBROUTINE") {
-    ($dispatch = $base) =~ s/(.*)::([^:]+)+/$1\->$2/;
-    $rc            = _check_method($dispatch, $log);
+  elsif ($method eq "PREFIX") {
+    ($dispatch = $base) =~ s/(.*)::([^:]+)+/$1\->dispatch_$2/;
+    $coderef       = _check_dispatch($dispatch, $log);
   }
   else {
-    ($dispatch = $base) =~ s/(.*)::([^:]+)+/$1\->$2/;
-    $rc          = _check_method($dispatch, $log);
+    # Determine method
+    ($dispatch = $base) =~ s/(.*)::([^:]+)+/$1\->dispatch_$2/;
+    $coderef       = _check_dispatch($dispatch, $log);
     
-    unless ($rc) {
-      $dispatch      = "$base->handler";
-      $rc            = _check_method($dispatch, $log);
+    unless ($coderef) {
+      $dispatch    = "$base->handler";
+      $coderef     = _check_dispatch($dispatch, $log);
     }
   }
 
-  unless ($rc) {
+  unless ($coderef) {
     $log->info("\t$uri did not result in a valid method")
       if $Apache::Dispatch::DEBUG;
     $log->info("Exiting Apache::Dispatch");
@@ -172,7 +191,7 @@ sub handler {
 #---------------------------------------------------------------------
   
   $r->handler('perl-script');
-  $r->push_handlers(PerlHandler => $rc);
+  $r->push_handlers(PerlHandler => $coderef);
   
 #---------------------------------------------------------------------
 # wrap up...
@@ -185,29 +204,31 @@ sub handler {
 
 #---------------------------------------------------------------------
 # internal and configuration subroutines
+# for internal use only
 #---------------------------------------------------------------------
 
-sub _check_method {
+# internal methods
+
+sub _check_dispatch {
   my ($dispatch, $log) = @_;
 
   $log->info("\tchecking the validity of $dispatch")
      if $Apache::Dispatch::DEBUG > 1;
 
-  # try some complecated trickery here...
-  my $test_object = {};
+  my $object       = {};
 
   my ($class, $method) = split '->', $dispatch;
 
-  bless $test_object, $class;
-  my $test = $test_object->can($method);
+  bless $object, $class;
+  my $coderef      = $object->can($method);
 
-  if ($test && $Apache::Dispatch::DEBUG > 1) {
+  if ($coderef && $Apache::Dispatch::DEBUG > 1) {
     $log->info("\t$dispatch appears to be a valid method call");
   } elsif ($Apache::Dispatch::DEBUG > 1) {
-    $log->info("\t$dispatch does not appear to be a valid method call");
+    $log->info("\t$dispatch is not a valid method call");
   }
 
-  return $test;  
+  return $coderef;  
 }
 
 sub _check_deny {
@@ -216,7 +237,7 @@ sub _check_deny {
   my $total             = 0;
 
   foreach my $match (@deny) {
-    $log->info("\tchecking $dispatch against DispatchDeny rule $match")
+    $log->info("\tchecking $dispatch against DispatchDeny $match")
       if $Apache::Dispatch::DEBUG > 1;
 
      $total++ if ($dispatch =~ m/^\Q$match/);
@@ -231,7 +252,7 @@ sub _check_allow {
   my $total             = 0;
 
   foreach my $match (@allow) {
-    $log->info("\tchecking $dispatch against DispatchAllow rule $match")
+    $log->info("\tchecking $dispatch against DispatchAllow $match")
       if $Apache::Dispatch::DEBUG > 1;
 
      $total++ if ($dispatch =~ m/^\Q$match/);
@@ -240,9 +261,7 @@ sub _check_allow {
   return $total;
 }
 
-# it doesn't make sense to create a dispatcher on anything other than
-# on a per-server/vhost basis, but we need to make sure that each
-# vhost can properly override the main server config
+# configuration methods
 
 sub _new {
   return bless {}, shift;
@@ -252,25 +271,41 @@ sub SERVER_CREATE {
   my $class          = shift;
   my $self           = $class->_new;
 
-  # merge the default _deny values with whatever is already defined
-  my @core           = qw(CORE AUTOLOAD UNIVERSAL SUPER);
-  my %union          = ();
-
-  foreach my $key (@core, @{$self->{_deny}}) {
-    $union{$key}++;
-  }
-  @{$self->{_deny}}  = keys %union;
-
-  # for the others, just define some defaults
-  $self->{_mode}   ||= "Safe";
-  $self->{_method} ||= "Handler";
-
   return $self;
 }
 
 sub SERVER_MERGE {
   my ($parent, $current) = @_;
   my %new = (%$parent, %$current);
+
+  # merge the default _deny values with whatever is already defined
+  my @core           = qw(CORE AUTOLOAD UNIVERSAL SUPER);
+  my %union          = ();
+
+  foreach my $key (@core, @{$new{_deny}}) {
+    $union{$key}++;
+  }
+  @{$new{_deny}}  = keys %union;
+
+  # for the others, just define some defaults
+  $new{_mode}   ||= "SAFE";
+  $new{_method} ||= "HANDLER";
+
+  return bless \%new, ref($parent);
+}
+
+sub DIR_CREATE {
+  my $class          = shift;
+  my $self           = $class->_new;
+
+  return $self;
+}
+
+sub DIR_MERGE {
+  my ($parent, $current) = @_;
+  my %new = (%$parent, %$current);
+
+  $new{_method}   ||= "PREFIX";
 
   return bless \%new, ref($parent);
 }
@@ -290,7 +325,7 @@ sub DispatchDeny ($$@) {
 sub DispatchMode ($$$) {
   my ($cfg, $parms, $arg) = @_;
   my $scfg = Apache::ModuleConfig->get($parms->server);
-  if ($arg =~ m/^Safe|Brave|Foolish$/i) {
+  if ($arg =~ m/^Safe|Brave$/i) {
     $scfg->{_mode} = uc($arg);
   } else {
     die "Invalid DispatchMode $arg!";
@@ -300,19 +335,28 @@ sub DispatchMode ($$$) {
 sub DispatchMethod ($$$) {
   my ($cfg, $parms, $arg) = @_;
   my $scfg = Apache::ModuleConfig->get($parms->server);
-  if ($arg =~ m/^Handler|Subroutine|Determine$/i) {
+  if ($arg =~ m/^Handler|Prefix|Determine$/i) {
     $scfg->{_method} = uc($arg);
+    $cfg->{_method}  = uc($arg);
   } else {
     die "Invalid DispatchMethod $arg!";
   }
 }
+
+sub DispatchBase ($$$) {
+  my ($cfg, $parms, $arg) = @_;
+  
+  die "DispatchBase must be defined" unless $arg;
+  $cfg->{_base} = $arg;
+}
+
 1;
 
 __END__
 
 =head1 NAME
 
-Apache::Dispatch - call PerlHandlers with the ease of CGI
+Apache::Dispatch - call PerlHandlers with the ease of CGI scripts
 
 =head1 SYNOPSIS
 
@@ -326,80 +370,142 @@ httpd.conf:
   DispatchAllow Custom
   DispatchDeny Apache Protected
 
+  <Location /Foo>
+    PerlModule Bar
+    DispatchBase Bar
+    DispatchMethod Prefix
+  </Location>
+
 =head1 DESCRIPTION
 
 Apache::Dispatch translates $r->uri into a class and method and runs
 it as a PerlHandler.  Basically, this allows you to call PerlHandlers
-as you would CGI scripts - from the browser - without having to load
-your httpd.conf with a slurry of <Location> tags.
+as you would CGI scripts - directly from the browser - without having
+to load your httpd.conf with a slurry of <Location> tags.
 
 =head1 EXAMPLE
 
-in httpd.conf:
+there are two ways of configuring Apache::Dispatch:
 
-  PerlModule Apache::Dispatch
-  PerlFixupHandler Apache::Dispatch
+per-server:
+  in httpd.conf:
 
-  DispatchMode Safe
-  DispatchMethod Handler
-  DispatchAllow Test
+    PerlModule Apache::Dispatch
+    PerlFixupHandler Apache::Dispatch
 
-in browser:
-  http://localhost/Foo
+    DispatchMode Safe
+    DispatchMethod Handler
+    DispatchAllow Test
 
-the results are the same as if your httpd.conf looked like:
-  <Location /Foo>
-     SetHandler perl-script
-     PerlHandler Foo
-  </Location>
+  in browser:
+    http://localhost/Foo
 
-=head1 CONFIGURATION
+  the results are the same as if your httpd.conf looked like:
+    <Location /Foo>
+       SetHandler perl-script
+       PerlHandler Foo
+    </Location>
 
-All configuration directives apply on a per-server basis. 
-Virtual Hosts inherit any directives from the main server or can
-delcare their own.
+per-location:
+  in httpd.conf
 
-  DispatchMode    - Safe:       allow only those methods whose
-                                namespace is explitily allowed by 
-                                DispatchAllow and explitily not
-                                denied by DispatchDeny
+    PerlModule Apache::Dispatch
+    PerlModule Bar
 
-                    Brave:      allow only those methods whose
-                                namespace is explitily not denied by 
-                                DispatchDeny 
+    <Location /Foo>
+      PerlFixupHandler Apache::Dispatch
+      DispatchBase Bar
+      DispatchMethod Prefix
+    </Location>
 
-                    Foolish:    allow any method
+  in browser:
+    http://localhost/Foo/baz
 
-  DispatchMethod  - Handler:    assume the method name is handler(),
-                                meaning that /Foo/Bar becomes
-                                Foo::Bar->handler()
+  the results are the same as if your httpd.conf looked like:
+    <Location /Foo>
+       SetHandler perl-script
+       PerlHandler Bar::dispatch_baz
+    </Location>
 
-                    Subroutine: assume the method name is the last
-                                part of the uri - /Foo/Bar becomes
-                                Foo->Bar()
+  The per-location configuration offers additional security and
+  protection by hiding both the name of the package and method from
+  the browser.  Because any class under the Bar:: hierarchy can be
+  called, one <Location> directive is be able to handle all the
+  methods of Bar, Bar::Baz, etc...
 
-                    Determine:  the method may either be handler() or
-                                the last part of the uri.  the last
-                                part is checked first, so  this has
-                                the additional benefit of allowing
-                                both /Foo/Bar/handler and /Foo/Bar to
-                                to call Foo::Bar::handler().
-                                of course, if Foo->Bar() exists, that
-                                will be called since it would be found
-                                first.
 
-  DispatchAllow   - a list of namespaces allowed execution according
-                    to the above rules
+=head1 CONFIGURATION DIRECTIVES
 
-  DispatchDeny    - a list of namespaces denied execution according
-                    to the above rules
+  DispatchBase  
+    Applies on a per-location basis only.  The base class to be 
+    substituted for the $r->location part of the uri.
+
+  DispatchMethod 
+    Applies on a per-server or per directory basis.  Each directory 
+    or virtual host will inherit the value of the server if it does
+    not specify a method itself.  It accepts the following values:
+
+      Handler   - Assume the method name is handler(), for example
+                  /Foo/Bar becomes Foo::Bar->handler().
+                  This is the default value outside of <Location>
+                  directives configured with DispatchBase.
+
+      Prefix    - Assume the method name is the last part of the 
+                  uri and prefix dispatch_ to the method name.
+                  /Foo/Bar becomes Foo->dispatch_bar().
+                  This is the default value within <Location>
+                  directives configured with DispatchBase.
+
+      Determine - The method may either be handler() or the last part
+                  of the uri prefixed with dispatch_.  The method 
+                  will be determined by first trying dispatch_method()
+                  then by trying handler().
+
+  DispatchMode    
+    Applies on a per-server basis, except where a <Location> directive
+    is using DispatchBase.  Values of the main server will be inherited
+    by each virtual host.  It accepts the following values:
+
+        Safe    - Allow only those methods whose namespace is 
+                  explicitly allowed by DispatchAllow and explicitly
+                  not denied by DispatchDeny.  This is the default.
+
+        Brave   - Allow only those methods whose namespace is 
+                  explicitly not denied by DispatchAllow.  This is
+                  primarily intended for development and ought to
+                  work quite nicely with Apache::StatINC.  Its 
+                  security is not guaranteed.
+                  
+  DispatchAllow 
+    A list of namespaces allowed to be dispatched according to the 
+    above DispatchMethod and DispatchMode rules.  Applies on a 
+    per-server basis, except where a <Location> directive is using 
+    DispatchBase.  Values of the main server will be inherited by each
+    virtual host. 
+
+  DispatchDeny
+    A list of namespaces denied dispatch according to the above
+    DispatchMethod and DispatchMode rules.  Applies on a per-server
+    basis, except where a <Location> directive is using DispatchBase.
+    Values of the main server will be inherited by each virtual host.
 
 =head1 NOTES
 
-Apache::Dispatch tries to be a bit intelligent about things.  If by
-the time the uri reaches the fixup phase it can be mapped to a real
-file, directory, or <Location> tag, Apache::Dispatch declines the
+There is no require()ing or use()ing of the packages or methods prior
+to their use as a PerlHandler.  This means that if you try to dispatch
+a method without a PerlModule directive or use() entry in your 
+startup.pl you probably will not meet with much success.  This adds a
+bit of security and reminds us we should be pre-loading that code in
+the parent process anyway...
+
+Apache::Dispatch tries to be a bit intelligent about things.  If, by
+the time it reaches the fixup phase, the uri can be mapped to a real
+file, directory, or <Location> tag (other than one containing a
+DispatchBase directive), Apache::Dispatch declines to handle the
 request.
+
+If the uri can be dispatched but contains anything other than
+[a-zA-Z0-9_/-] Apache::Dispatch declines to handle the request.
 
 DispatchDeny always includes the following namespaces:
   AUTOLOAD
@@ -407,29 +513,24 @@ DispatchDeny always includes the following namespaces:
   SUPER
   UNIVERSAL
 
-Like everything in perl, the package names are case sensitive relative
-to $r->uri.
+Like everything in perl, the package names are case sensitive.
 
 Verbose debugging is enabled by setting $Apache::Dispatch::DEBUG=1.
 Very verbose debugging is enabled at 2.  To turn off all debug
 information set your apache LogLevel directive above info level.
 
 This is alpha software, and as such has not been tested on multiple
-platforms or environments.  It requires PERL_INIT=1, PERL_LOG_API=1,
-and maybe other hooks to function properly.
+platforms or environments for security, stability or other concerns.
+It requires PERL_FIXUP=1, PERL_LOG_API=1, PERL_HANDLER=1, and maybe
+other hooks to function properly.
 
 =head1 FEATURES/BUGS
 
-DispatchDeny and DispatchAllow work, but not quite the way I want.
-For instance, DispatchDeny Custom will deny to Customer:: methods,
-while DispatchAllow Custom will allow Custom::Filter->handler() and
-Custom->filter(), but deny Customer:: methods.  I think DistpatchAllow
-has the proper behavior, but DispatchDeny may need to be changed.
-Input is welcome.
+No known bugs or features at this time...
 
 =head1 SEE ALSO
 
-perl(1), mod_perl(1), Apache(3), Apache::ModuleConfig(3)
+perl(1), mod_perl(1), Apache(3)
 
 =head1 AUTHOR
 

@@ -1,6 +1,6 @@
 NAME
 
-Apache::Dispatch - call PerlHandlers with the ease of CGI
+Apache::Dispatch - call PerlHandlers with the ease of CGI scripts
 
 SYNOPSIS
 
@@ -14,80 +14,142 @@ httpd.conf:
   DispatchAllow Custom
   DispatchDeny Apache Protected
 
+  <Location /Foo>
+    PerlModule Bar
+    DispatchBase Bar
+    DispatchMethod Prefix
+  </Location>
+
 DESCRIPTION
 
 Apache::Dispatch translates $r->uri into a class and method and runs
 it as a PerlHandler.  Basically, this allows you to call PerlHandlers
-as you would CGI scripts - from the browser - without having to load
-your httpd.conf with a slurry of <Location> tags.
+as you would CGI scripts - directly from the browser - without having
+to load your httpd.conf with a slurry of <Location> tags.
 
 EXAMPLE
 
-in httpd.conf:
+there are two ways of configuring Apache::Dispatch:
 
-  PerlModule Apache::Dispatch
-  PerlFixupHandler Apache::Dispatch
+per-server:
+  in httpd.conf:
 
-  DispatchMode Safe
-  DispatchMethod Handler
-  DispatchAllow Test
+    PerlModule Apache::Dispatch
+    PerlFixupHandler Apache::Dispatch
 
-in browser:
-  http://localhost/Foo
+    DispatchMode Safe
+    DispatchMethod Handler
+    DispatchAllow Test
 
-the results are the same as if your httpd.conf looked like:
-  <Location /Foo>
-     SetHandler perl-script
-     PerlHandler Foo
-  </Location>
+  in browser:
+    http://localhost/Foo
 
-CONFIGURATION
+  the results are the same as if your httpd.conf looked like:
+    <Location /Foo>
+       SetHandler perl-script
+       PerlHandler Foo
+    </Location>
 
-All configuration directives apply on a per-server basis. 
-Virtual Hosts inherit any directives from the main server or can
-delcare their own.
+per-location:
+  in httpd.conf
 
-  DispatchMode    - Safe:       allow only those methods whose
-                                namespace is explitily allowed by 
-                                DispatchAllow and explitily not
-                                denied by DispatchDeny
+    PerlModule Apache::Dispatch
+    PerlModule Bar
 
-                    Brave:      allow only those methods whose
-                                namespace is explitily not denied by 
-                                DispatchDeny 
+    <Location /Foo>
+      PerlFixupHandler Apache::Dispatch
+      DispatchBase Bar
+      DispatchMethod Prefix
+    </Location>
 
-                    Foolish:    allow any method
+  in browser:
+    http://localhost/Foo/baz
 
-  DispatchMethod  - Handler:    assume the method name is handler(),
-                                meaning that /Foo/Bar becomes
-                                Foo::Bar->handler()
+  the results are the same as if your httpd.conf looked like:
+    <Location /Foo>
+       SetHandler perl-script
+       PerlHandler Bar::dispatch_baz
+    </Location>
 
-                    Subroutine: assume the method name is the last
-                                part of the uri - /Foo/Bar becomes
-                                Foo->Bar()
+  The per-location configuration offers additional security and
+  protection by hiding both the name of the package and method from
+  the browser.  Because any class under the Bar:: hierarchy can be
+  called, one <Location> directive is be able to handle all the
+  methods of Bar, Bar::Baz, etc...
 
-                    Determine:  the method may either be handler() or
-                                the last part of the uri.  the last
-                                part is checked first, so  this has
-                                the additional benefit of allowing
-                                both /Foo/Bar/handler and /Foo/Bar to
-                                to call Foo::Bar::handler().
-                                of course, if Foo->Bar() exists, that
-                                will be called since it would be found
-                                first.
 
-  DispatchAllow   - a list of namespaces allowed execution according
-                    to the above rules
+CONFIGURATION DIRECTIVES
 
-  DispatchDeny    - a list of namespaces denied execution according
-                    to the above rules
+  DispatchBase  
+    Applies on a per-location basis only.  The base class to be 
+    substituted for the $r->location part of the uri.
+
+  DispatchMethod 
+    Applies on a per-server or per directory basis.  Each directory 
+    or virtual host will inherit the value of the server if it does
+    not specify a method itself.  It accepts the following values:
+
+      Handler   - Assume the method name is handler(), for example
+                  /Foo/Bar becomes Foo::Bar->handler().
+                  This is the default value outside of <Location>
+                  directives configured with DispatchBase.
+
+      Prefix    - Assume the method name is the last part of the 
+                  uri and prefix dispatch_ to the method name.
+                  /Foo/Bar becomes Foo->dispatch_bar().
+                  This is the default value within <Location>
+                  directives configured with DispatchBase.
+
+      Determine - The method may either be handler() or the last part
+                  of the uri prefixed with dispatch_.  The method 
+                  will be determined by first trying dispatch_method()
+                  then by trying handler().
+
+  DispatchMode    
+    Applies on a per-server basis, except where a <Location> directive
+    is using DispatchBase.  Values of the main server will be inherited
+    by each virtual host.  It accepts the following values:
+
+        Safe    - Allow only those methods whose namespace is 
+                  explicitly allowed by DispatchAllow and explicitly
+                  not denied by DispatchDeny.  This is the default.
+
+        Brave   - Allow only those methods whose namespace is 
+                  explicitly not denied by DispatchAllow.  This is
+                  primarily intended for development and ought to
+                  work quite nicely with Apache::StatINC.  Its 
+                  security is not guaranteed.
+                  
+  DispatchAllow 
+    A list of namespaces allowed to be dispatched according to the 
+    above DispatchMethod and DispatchMode rules.  Applies on a 
+    per-server basis, except where a <Location> directive is using 
+    DispatchBase.  Values of the main server will be inherited by each
+    virtual host. 
+
+  DispatchDeny
+    A list of namespaces denied dispatch according to the above
+    DispatchMethod and DispatchMode rules.  Applies on a per-server
+    basis, except where a <Location> directive is using DispatchBase.
+    Values of the main server will be inherited by each virtual host.
 
 NOTES
 
-Apache::Dispatch tries to be a bit intelligent about things.  If by
-the time the uri reaches the fixup phase it can be mapped to a real
-file, directory, or <Location> tag, Apache::Dispatch declines the
+There is no require()ing or use()ing of the packages or methods prior
+to their use as a PerlHandler.  This means that if you try to dispatch
+a method without a PerlModule directive or use() entry in your 
+startup.pl you probably will not meet with much success.  This adds a
+bit of security and reminds us we should be pre-loading that code in
+the parent process anyway...
+
+Apache::Dispatch tries to be a bit intelligent about things.  If, by
+the time it reaches the fixup phase, the uri can be mapped to a real
+file, directory, or <Location> tag (other than one containing a
+DispatchBase directive), Apache::Dispatch declines to handle the
 request.
+
+If the uri can be dispatched but contains anything other than
+[a-zA-Z0-9_/-] Apache::Dispatch declines to handle the request.
 
 DispatchDeny always includes the following namespaces:
   AUTOLOAD
@@ -95,29 +157,24 @@ DispatchDeny always includes the following namespaces:
   SUPER
   UNIVERSAL
 
-Like everything in perl, the package names are case sensitive relative
-to $r->uri.
+Like everything in perl, the package names are case sensitive.
 
 Verbose debugging is enabled by setting $Apache::Dispatch::DEBUG=1.
 Very verbose debugging is enabled at 2.  To turn off all debug
 information set your apache LogLevel directive above info level.
 
 This is alpha software, and as such has not been tested on multiple
-platforms or environments.  It requires PERL_INIT=1, PERL_LOG_API=1,
-and maybe other hooks to function properly.
+platforms or environments for security, stability or other concerns.
+It requires PERL_FIXUP=1, PERL_LOG_API=1, PERL_HANDLER=1, and maybe
+other hooks to function properly.
 
 FEATURES/BUGS
 
-DispatchDeny and DispatchAllow work, but not quite the way I want.
-For instance, DispatchDeny Custom will deny to Customer:: methods,
-while DispatchAllow Custom will allow Custom::Filter->handler() and
-Custom->filter(), but deny Customer:: methods.  I think DistpatchAllow
-has the proper behavior, but DispatchDeny may need to be changed.
-Input is welcome.
+No known bugs or features at this time...
 
 SEE ALSO
 
-perl(1), mod_perl(1), Apache(3), Apache::ModuleConfig(3)
+perl(1), mod_perl(1), Apache(3)
 
 AUTHOR
 
