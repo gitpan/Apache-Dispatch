@@ -6,13 +6,14 @@ package Apache::Dispatch;
 #        
 #---------------------------------------------------------------------
 
-use Apache::Constants qw( OK DECLINED SERVER_ERROR);
+use mod_perl 1.2401;
+use Apache::Constants qw(OK DECLINED SERVER_ERROR);
 use Apache::Log;
 use Apache::ModuleConfig;
 use DynaLoader ();
 use strict;
 
-$Apache::Dispatch::VERSION = '0.06';
+$Apache::Dispatch::VERSION = '0.07';
 
 # create global hash to hold the modification times of the modules
 my %stat           = ();
@@ -35,6 +36,26 @@ sub handler {
 #---------------------------------------------------------------------
   
   my $r            = shift;
+  
+  my $dcfg         = Apache::ModuleConfig->get($r, 
+                                               __PACKAGE__);
+  my $scfg         = Apache::ModuleConfig->get($r->server, 
+                                               __PACKAGE__);
+
+  my $filter       = $dcfg->{_filter}         ||
+                     $r->dir_config('Filter') ||
+                     "Off";
+
+  my $autoload     = $dcfg->{_autoload} || $scfg->{_autoload};
+
+  my $stat         = $dcfg->{_stat} || $scfg->{_stat};
+
+  my @parents      = $dcfg->{_isa} ? @{$dcfg->{_isa}} :
+                     $scfg->{_isa} ? @{$scfg->{_isa}} : ();
+
+  my @extras       = $dcfg->{_extras} ? @{$dcfg->{_extras}} :
+                     $scfg->{_extras} ? @{$scfg->{_extras}} : ();
+
   my $log          = $r->server->log;
 
   my $uri          = $r->uri;
@@ -47,10 +68,23 @@ sub handler {
   
   $log->info("Using Apache::Dispatch");
 
+  # redefine $r as necessary for Apache::Filter 1.013 and above
+  if (uc($filter) eq 'ON') {
+    $log->info("\tregistering handler with Apache::Filter")
+       if $Apache::Dispatch::DEBUG > 1;
+
+    # in case we used DispatchFilter directive instead, make sure
+    # that other filters in the chain recognize us...
+    $r->dir_config->set(Filter => 'On');
+
+    $r             = $r->filter_register;
+    $log           = $r->server->log;
+  }
+
   $log->info("\tchecking $uri for possible dispatch...")
      if $Apache::Dispatch::DEBUG;
 
-  # if the uri contains any characters we don't like, bounce
+  # if the uri contains any characters we don't like, bounce...
   # is this necessary?
   if ($uri =~ m![^\w/-]!) {
     $log->info("\t$uri has bogus characters...")
@@ -59,16 +93,16 @@ sub handler {
     return DECLINED;
   }
 
-  my $dcfg         = Apache::ModuleConfig->get($r);
-  my $scfg         = Apache::ModuleConfig->get($r->server);
-
   if ($Apache::Dispatch::DEBUG > 1) {
     $log->info("\tapplying the following dispatch rules:",
       "\n\t\tDispatchPrefix: ", $dcfg->{_prefix},
-      "\n\t\tDispatchStat: ", ($dcfg->{_stat} || $scfg->{_stat}),
-      "\n\t\tDispatchExtras: ",
-       ($dcfg->{_extras} ? (join ' ', @{$dcfg->{_extras}}) : 
-       ($scfg->{_extras} ? (join ' ', @{$scfg->{_extras}}) : "None"))
+      "\n\t\tDispatchStat: ", $stat,
+      "\n\t\tDispatchFilter: ", $filter,
+      "\n\t\tDispatchAUTOLOAD: ", $autoload,
+      "\n\t\tDispatchExtras: ", 
+       (@extras ? (join ' ', @extras) : "None"),
+      "\n\t\tDispatchISA: ",
+       (@parents ? (join ' ', @parents) : "None"),
     );
   } 
 
@@ -83,13 +117,25 @@ sub handler {
   bless $object, $class;
 
 #---------------------------------------------------------------------
+# set parent classes for DispatchISA
+#---------------------------------------------------------------------
+  
+  if (@parents) {
+    $rc = _set_ISA($class, $log, @parents);
+
+    unless ($rc) {
+      $log->error("\tDispatchISA did not return successfully!");
+      $log->info("Exiting Apache::Dispatch");
+      return DECLINED;
+    }
+  }
+
+#---------------------------------------------------------------------
 # reload the module if DispatchStat On or ISA
 #---------------------------------------------------------------------
   
-  my $stat = $dcfg->{_stat} || $scfg->{_stat};
-
   if ($stat eq "ON") {
-    my $rc = _stat($class, $log);
+    $rc = _stat($class, $log);
 
     unless ($rc) {
       $log->error("\tDispatchStat did not return successfully!");
@@ -98,21 +144,12 @@ sub handler {
     }
   }
   elsif ($stat eq "ISA") {
-    # turn off strict here so we can get at the class's @ISA
-    no strict 'refs';
+    $rc = _recurse_stat($class, $log);
 
-    # add the current class to the list of those to check
-    my @packages = @{"${class}::ISA"};
-    push @packages, $class;
-
-    foreach my $package (@packages) {
-      my $rc = _stat($package, $log);
-
-      unless ($rc) {
-        $log->error("\tDispatchStat did not return successfully!");
-        $log->info("Exiting Apache::Dispatch");
-        return DECLINED;
-      }
+    unless ($rc) {
+      $log->error("\tDispatchStat did not return successfully!");
+      $log->info("Exiting Apache::Dispatch");
+      return DECLINED;
     }
   }
 
@@ -121,7 +158,7 @@ sub handler {
 # if not, decline the request
 #---------------------------------------------------------------------
   
-  my $handler = _check_dispatch($object, $method, $log);
+  my $handler = _check_dispatch($object, $method, $autoload, $log);
 
   if ($handler) {
     $log->info("\t$uri was translated into $class->$method")
@@ -138,19 +175,19 @@ sub handler {
 # since the uri is dispatchable, check each of the extras
 #---------------------------------------------------------------------
 
-  my @extras  = $dcfg->{_extras} ? @{$dcfg->{_extras}} :
-                $scfg->{_extras} ? @{$scfg->{_extras}} : "";
-
   foreach my $extra (@extras) {
     if ($extra eq "PRE") {
-      $prehandler = _check_dispatch($object, "pre_dispatch", $log);
+      $prehandler = _check_dispatch($object, "pre_dispatch", 
+                                    $autoload, $log);
     }
     elsif ($extra eq "POST") {
-      $posthandler = _check_dispatch($object, "post_dispatch", $log);
+      $posthandler = _check_dispatch($object, "post_dispatch", 
+                                     $autoload, $log);
     }
     elsif ($extra eq "ERROR") {
       $errorhandler 
-        = _check_dispatch($object, "error_dispatch", $log);
+        = _check_dispatch($object, "error_dispatch", 
+                          $autoload, $log);
     }
   }
   
@@ -208,14 +245,16 @@ sub _translate_uri {
   (my $location = $r->location) =~ s!/!!;
   $class_and_method  =~ s/^$location/$prefix/e;
 
-  # change that last :: to a ->
-  # prefix method with dispatch_
-  $class_and_method  =~ s/(.*)::([^:]+)+/$1\->dispatch_$2/;
+  my ($class, $method);
 
-  my ($class, $method) = split /->/, $class_and_method;
-
-  # make a call to / default to dispatch_index
-  $method = "dispatch_index" unless $method;
+  if ($prefix eq $class_and_method) {
+    $method = "dispatch_index";
+    $class  = $prefix;
+  }
+  else {
+    ($class, $method) = $class_and_method =~ m/(.*)::(.*)/;
+    $method = "dispatch_$method";
+  }
 
   return ($class, $method);
 }
@@ -226,14 +265,20 @@ sub _check_dispatch {
 # this method is for internal use only
 #---------------------------------------------------------------------
 
-  my ($object, $method, $log) = @_;
+  my ($object, $method, $autoload, $log) = @_;
 
-  my $class = ref($object) if $Apache::Dispatch::DEBUG > 1;
+  my $class        = ref($object);
+
+  my $coderef;
 
   $log->info("\tchecking the validity of $class->$method...")
      if $Apache::Dispatch::DEBUG > 1;
 
-  my $coderef     = $object->can($method) || $object->can("AUTOLOAD");
+  if ($autoload eq "ON") {
+    $coderef     = $object->can($method) || $object->can("AUTOLOAD");
+  } else {
+    $coderef     = $object->can($method);
+  }
 
   if ($coderef && $Apache::Dispatch::DEBUG > 1) {
     $log->info("\t$class->$method is a valid method call");
@@ -246,7 +291,7 @@ sub _check_dispatch {
 
 sub _stat {
 #---------------------------------------------------------------------
-# stat the module to see if it has changed...
+# stat and reload the module if it has changed...
 # this method is for internal use only
 #---------------------------------------------------------------------
 
@@ -254,7 +299,7 @@ sub _stat {
 
   (my $module = $class) =~ s!::!/!g;
 
-  $module          = "$module.pm";
+  $module          .= ".pm";
 
   $stat{$module} = $^T unless $stat{$module};
 
@@ -297,41 +342,91 @@ sub _stat {
   return 1;
 }
 
+sub _recurse_stat {
+#---------------------------------------------------------------------
+# recurse through all the parent classes of the current class
+# and call _stat on each
+# this method is for internal use only
+#---------------------------------------------------------------------
 
-# configuration methods
+  my ($class, $log) = @_;
+
+  my $rc = _stat($class, $log);
+        
+  return undef unless $rc;
+
+  # turn off strict here so we can get at the class @ISA
+  no strict 'refs';
+
+  foreach my $package (@{"${class}::ISA"}) {
+    $rc = _recurse_stat($package, $log);
+    last unless $rc;
+  }
+
+  return $rc;
+}
+
+sub _set_ISA {
+#---------------------------------------------------------------------
+# set the ISA array for the class
+# this method is for internal use only
+#---------------------------------------------------------------------
+
+  my ($class, $log, @parents) = @_;
+
+  # turn off strict here so we can get at the class @ISA
+  no strict 'refs';
+
+  if ($Apache::Dispatch::DEBUG > 1) {
+    $log->info("\t\@ISA for $class currently contains ", 
+                (join ", ", @{"${class}::ISA"}));
+    $log->info("\tabout to add ",
+              (join ", ", @parents));
+  }
+
+  @{"${class}::ISA"} = (@{"${class}::ISA"}, @parents);
+
+  return 1; 
+}
+
+#---------------------------------------------------------------------
+# Apache configuration methods
+#---------------------------------------------------------------------
 
 sub _new {
   return bless {}, shift;
 }
 
 sub SERVER_CREATE {
-  my $class          = shift;
-  my $self           = $class->_new;
+  my $class        = shift;
+  my $self         = $class->_new;
 
   return $self;
 }
 
 sub SERVER_MERGE {
   my ($parent, $current) = @_;
-  my %new = (%$parent, %$current);
+  my %new          = (%$parent, %$current);
 
-  $new{_stat} ||= "OFF";   # no reloading by default;
+  $new{_stat}      ||= "OFF";   # no reloading by default
+  $new{_autoload}  ||= "OFF";   # no autoloading by default
 
   return bless \%new, ref($parent);
 }
 
 sub DIR_CREATE {
-  my $class          = shift;
-  my $self           = $class->_new;
+  my $class        = shift;
+  my $self         = $class->_new;
 
   return $self;
 }
 
 sub DIR_MERGE {
   my ($parent, $current) = @_;
-  my %new = (%$parent, %$current);
+  my %new          = (%$parent, %$current);
 
-  $new{_stat} ||= "OFF";   # no reloading by default;
+  $new{_stat}      ||= "OFF";   # no reloading by default
+  $new{_autoload}  ||= "OFF";   # no autloading by default
 
   return bless \%new, ref($parent);
 }
@@ -339,32 +434,58 @@ sub DIR_MERGE {
 sub DispatchPrefix ($$$) {
   my ($cfg, $parms, $arg) = @_;
   
-  die "DispatchPrefix must be defined" unless $arg;
-  $cfg->{_prefix} = $arg;
+  $cfg->{_prefix}  = $arg;
 }
 
 sub DispatchExtras ($$@) {
   my ($cfg, $parms, $arg) = @_;
-  my $scfg = Apache::ModuleConfig->get($parms->server);
   
-  if ($arg =~ m/^Pre|Post|Error$/i) {
-    push @{$scfg->{_extras}}, uc($arg);
-    push @{$cfg->{_extras}}, uc($arg);
+  if ($arg =~ m/^(Pre|Post|Error)$/i) {
+    push @{$cfg->{_extras}}, uc($arg)
+      unless grep /$arg/i, @{$cfg->{_extras}};
   } 
   else {
     die "Invalid DispatchExtra $arg!";
   }
 }
 
+sub DispatchISA ($$@) {
+  my ($cfg, $parms, $arg) = @_;
+  
+  push @{$cfg->{_isa}}, $arg
+    unless grep /$arg/, @{$cfg->{_isa}};
+}
+
 sub DispatchStat ($$$) {
   my ($cfg, $parms, $arg) = @_;
-  my $scfg = Apache::ModuleConfig->get($parms->server);
   
-  if ($arg =~ m/^On|Off|ISA$/i) {
-    $cfg->{_stat} = $scfg->{_stat} = uc($arg);
+  if ($arg =~ m/^(On|Off|ISA)$/i) {
+    $cfg->{_stat} = uc($arg);
   } 
   else {
     die "Invalid DispatchStat $arg!";
+  }
+}
+
+sub DispatchFilter ($$$) {
+  my ($cfg, $parms, $arg) = @_;
+  
+  if ($arg =~ m/^(On|Off)$/i) {
+    $cfg->{_filter} = uc($arg);
+  } 
+  else {
+    die "Invalid DispatchFilter $arg!";
+  }
+}
+
+sub DispatchAUTOLOAD ($$$) {
+  my ($cfg, $parms, $arg) = @_;
+  
+  if ($arg =~ m/^(On|Off)$/i) {
+    $cfg->{_autoload} = uc($arg);
+  } 
+  else {
+    die "Invalid DispatchAUTOLOAD $arg!";
   }
 }
 
@@ -374,7 +495,7 @@ __END__
 
 =head1 NAME
 
-Apache::Dispatch - call PerlHandlers with the ease of CGI scripts
+Apache::Dispatch - call PerlHandlers with the ease of Registry scripts
 
 =head1 SYNOPSIS
 
@@ -385,20 +506,23 @@ httpd.conf:
 
   DispatchExtras Pre Post Error
   DispatchStat On
+  DispatchISA "My::Utils"
+  DispatchAUTOLOAD Off
 
   <Location /Foo>
     SetHandler perl-script
     PerlHandler Apache::Dispatch
 
     DispatchPrefix Bar
+    DispatchFilter Off
   </Location>
 
 =head1 DESCRIPTION
 
 Apache::Dispatch translates $r->uri into a class and method and runs
 it as a PerlHandler.  Basically, this allows you to call PerlHandlers
-as you would CGI scripts without having to load your httpd.conf with
-a slurry of <Location> tags.
+as you would Regsitry scripts without having to load your httpd.conf
+with a slurry of <Location> tags.
 
 =head1 EXAMPLE
 
@@ -437,9 +561,10 @@ Bar::Baz, etc...
 
   DispatchExtras
     An optional list of extra processing to enable per-request.  They
-    may be applied on a per-server or per-location basis.  If the main
-    handler is not a valid method call, the request is declined prior
-    to the execution of any of the extra methods.
+    may be applied on a per-server or per-location basis, and must be 
+    turned on explicitly.  If the main handler is not a valid method
+    call, the request is declined prior to the execution of any of the
+    extra methods.
 
       Pre   - eval()s Foo->pre_dispatch($r) prior to dispatching the
               uri.  The $@ of the eval is not checked in any way.
@@ -449,57 +574,136 @@ Bar::Baz, etc...
 
       Error - If the main handler returns other than OK then 
               Foo->error_dispatch($r, $@) is called and return status
-              of it is returned instead.  Without this feature, the
-              return status of your handler is returned.
+              of it is returned instead.  Unlike the pre and post
+              processing routines above, error_dispatch is not wrapped
+              in an eval, so if it dies, the Apache::Dispatch dies,
+              and Apache will process the error using ErrorDocument,
+              custom_response(), etc.
+              With error_dispatch() disabled, the return status of the
+              the main handler is returned to the client.
 
   DispatchStat
-    An optional directive that enables reloading of the module
-    resulting from the uri to class translation, similar to
-    Apache::Registry or Apache::StatINC.  It applies on a per-server
-    or per-location basis and defaults to Off.  Although the same
-    functionality is available with Apache::StatINC for development
-    DispatchStat does not check all of the modules in %INC.  This cuts
-    down on overhead, making it a reasonable alternative to recycling
-    the server.
+    An optional directive that enables reloading of the module that is
+    the result of the uri to class->method translation, similar to
+    Apache::Registry, Apache::Reload, or Apache::StatINC.  It applies
+    on a per-server or per-location basis.
 
       On    - Test the called package for modification and reload on
               change
 
-      Off   - Do not test or reload the package
+      Off   - Do not test or reload the package (Default)
 
       ISA   - Test the called package, and all other packages in the
               called package's @ISA, and reload on change
 
+  DispatchAUTOLOAD
+    An optional directive that enables unknown methods to use 
+    AutoLoader.  It may be applied on a per-server or per-location
+    basis and defaults to Off.  Please see the special section on 
+    AUTOLOAD below.
+
+      On    - Allow for methods to be defined in AUTOLOAD method
+
+      Off   - Turn off search for AUTOLOAD method (Default)
+    
+  DispatchISA
+    An optional list of parent classes you want your dispatched class
+    to inherit from. It may be applied on a per-server or per-location
+    basis.
+
+  DispatchFilter 
+    If you have Apache::Filter 1.013 or above installed, you can take
+    advantage of other Apache::Filter aware modules.  Please see the
+    section on FILTERING below.  DispatchFilter may be applied on a 
+    per-location basis.  In keeping with Apache::Filter standards,
+    PerlSetVar Filter has the same effect as DispatchFilter but with
+    lower precedence.
+
+      On    - make the output of your module Apache::Filter aware
+
+      Off   - do not use Apache::Filter (Default)
+
 =head1 SPECIAL CODING GUIDELINES
+
+Migrating to Apache::Dispatch is relatively painless - it requires
+only a few minor code changes.  The good news is that once you adapt
+code to work with Dispatch, it can be used as a conventional mod_perl
+handler, requiring only a few special httpd.conf considerations.
+Below are a few things that require attention.
+
+In the interests of security, all handler methods must be prefixed
+with 'dispatch_', which is added to the uri behind the scenes.  Unlike
+ordinary mod_perl handlers, for Apache::Dispatch there is no default
+method (with a tiny exception - see NOTES below).
 
 Apache::Dispatch uses object oriented calls behind the scenes.  This 
 means that you either need to account for your handler to be called
 as a method handler, such as
 
   sub dispatch_bar {
-    my $class = shift;  # your class
-    my $r = shift;
+    my $self  = shift;  # your class
+    my $r     = shift;
   }
 
-or get the Apache request object yourself via
+or get the Apache request object directly via
 
   sub dispatch_bar {
-    my $r = Apache->request;
+    my $r     = Apache->request;
   }
+
+=head1 FILTERING
+
+Apache::Dispatch provides for output filtering using Apache::Filter
+1.013 and above.
+
+  <Location /Foo>
+    SetHandler perl-script
+    PerlHandler Apache::Dispatch Apache::Compress
+
+    DispatchPrefix Bar
+    DispatchFilter On
+  </Location>
+
+Your handler need do nothing special to make its output the start of
+the chain - Apache::Dispatch registers itself with Apache::Filter and
+hides the task from your handler.  Thus, any dispatched handler is
+automatically Apache::Filter ready without the need for additional
+code.
+
+The only caveat is that you must use the request object that is passed
+to the handler and not get it directly using Apache->request.
+
+=head1 AUTOLOAD
+
+Support for AUTOLOAD has been made optional, but requires special
+care.  Please take the time to read the camel book on using AUTOLOAD
+with can() and subroutine declarations (3rd ed pp326-329).
+
+Basically, you declare the methods you want AUTOLOAD to capture by 
+name at the top of your script.  This is necessary because can() 
+will return true if your class (or any parent class) contains an
+AUTOLOAD method, but $AUTOLOAD will only be populated for declared
+method calls.  Hence, without a declaration you won't be able to
+get at the name of the method you want to AUTOLOAD.
+
+DispatchISA introduced some convenience, but some headaches as well - 
+if you inherit from a class that uses AutoLoader then ALL method calls
+are true.  And as just explained, AUTOLOAD() will not know what the
+called method was.  This may represent a problem if you aren't aware
+that, say, CGI.pm uses AutoLoader and spend a few hours trying to 
+figure out why all of a sudden every URL under Dispatch is bombing.
+
+If you decide to use DispatchISA it is HIGHLY SUGGESTED that you do so
+with DispatchAUTOLOAD Off (which is the default behavior).
 
 =head1 NOTES
 
-In addition to the special methods pre_dispatch(), post_dispatch(),
-and error_dispatch(), if you define dispatch_index() it will be called
-by /Foo or /Foo/.  /Foo/index is always directly callable, but /Foo 
-will only translate to /Foo/index at the highest level - that is,
-when just the location is specified.  Meaning /Foo/Baz/index will call
-Bar::Baz->dispatch_index, but /Foo/Baz will try to call Bar->Baz().
-
-Support for AUTOLOAD has been enabled, but requires special care.
-Please take the time to read the camel book on using AUTOLOAD with 
-can() and subroutine declarations.  There is also a small note in
-eg/Foo.pm.  Consider the support experimental for now.
+If you define a dispatch_index() method calls to /Foo will default to
+it.  Unfortunately, this implicit translation only happens at the
+highest level - calls to /Foo/Bar will translate to Foo->Bar() (that
+is, unless Foo::Bar is your DispatchPrefix, in which case it will
+work but /Foo/Bar/Baz will not, etc).  Explicit calls to /Foo/index
+follow the normal dispatch rules.
 
 There is no require()ing or use()ing of the packages or methods prior
 to their use as a PerlHandler.  This means that if you try to dispatch
@@ -513,9 +717,14 @@ If the uri can be dispatched but contains anything other than
 
 Like everything in perl, the package names are case sensitive.
 
+Warnings have been left on, so if you set an invalid class with
+DispatchISA you will see a message like:
+  Can't locate package Foo::Bar for @Bar::Baz::ISA at 
+  .../Apache/Dispatch.pm line 277.
+
 Verbose debugging is enabled by setting $Apache::Dispatch::DEBUG=1.
 Very verbose debugging is enabled at 2.  To turn off all debug
-information set your apache LogLevel directive above info level.
+information set your Apache LogLevel directive above info level.
 
 This is alpha software, and as such has not been tested on multiple
 platforms or environments for security, stability or other concerns.
@@ -529,7 +738,8 @@ the request.  This might change to SERVER_ERROR in the future...
 
 =head1 SEE ALSO
 
-perl(1), mod_perl(1), Apache(3), Apache::StatINC(3)
+perl(1), mod_perl(1), Apache(3), Apache::Filter(3), Apache::Reload(3),
+Apache::StatINC(3)
 
 =head1 AUTHOR
 

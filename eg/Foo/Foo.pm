@@ -8,15 +8,15 @@ our $AUTOLOAD;
 # declare the methods you want AUTOLOAD to capture by name
 # that is, AUTOLOAD will still be called, but $AUTOLOAD
 # will only be populated for methods you declare here
-# see the camel book (3rd ed) pp326-329 as well before
-# treading here...
+#
+# read the camel book (3rd ed) pp326-329 before treading here...
 
 sub dispatch_baz;
 
 $Foo::Foo::output = undef;
 
 sub dispatch_foo {
-  my $class = shift;
+  my $self = shift;
   my $r = shift;
   $r->send_http_header('text/plain');
   $r->print("Foo->dispatch_foo()");
@@ -42,7 +42,7 @@ sub post_dispatch {
 
 sub error_dispatch {
   # test error_dispatch call
-  my $class = shift;
+  my $self = shift;
   my $r = shift;
   $r->send_http_header('text/plain');
   $r->print("Yikes!  Foo->dispatch_error()");
@@ -53,7 +53,7 @@ sub error_dispatch {
 
 sub dispatch_index {
   # test calls to /index or /
-  my $class = shift;
+  my $self = shift;
   my $r = shift;
   $r->send_http_header('text/plain');
   $r->print("Foo->dispatch_index()");
@@ -62,7 +62,7 @@ sub dispatch_index {
 }
 
 sub AUTOLOAD {
-  my $class = shift;
+  my $self = shift;
   my $r = shift;
 
   our $AUTOLOAD;

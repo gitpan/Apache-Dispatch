@@ -2,3 +2,82 @@ cache method calls as valid methods if seen previously to avoid can()
 overhead?
 
 test suite
+
+serious benchmarking...
+
+I tried to do some quick benchmarking using a real handler - I used a
+method handler so it runs under Apache::Dispatch and normal mod_perl 
+without modification.
+
+the handler did the following:
+  run an Oracle stored procedure (using Apache::DBI with connect_on_init)
+  fill in a simple template using Text::Template
+  output results
+
+I think the results look pretty promising in a real world scenario
+
+----------------------------------------------------------------------
+using a single <Location> directive with a method handler
+
+[gyoung@account-test bin]$ ./ab -n10000 -c10 \
+-C'MYA::Authenticate_=quality:12568' \
+http://account-test.laserlink.net/test
+
+This is ApacheBench, Version 1.3c <$Revision: 1.38 $> apache-1.3
+Copyright (c) 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Copyright (c) 1998-1999 The Apache Group, http://www.apache.org/
+
+Server Software:        Apache/1.3.12                                      
+Server Hostname:        account-test.laserlink.net
+Server Port:            80
+
+Document Path:          /test
+Document Length:        8703 bytes
+
+Concurrency Level:      10
+Time taken for tests:   697.210 seconds
+Complete requests:      10000
+Failed requests:        0
+Total transferred:      88548854 bytes
+HTML transferred:       87038703 bytes
+Requests per second:    14.34
+Transfer rate:          127.00 kb/s received
+
+Connnection Times (ms)
+              min   avg   max
+Connect:        0     1   372
+Processing:    99   695  2110
+Total:         99   696  2482
+ 
+----------------------------------------------------------------------
+using Apache::Dispatch with DispatchISA On
+
+[gyoung@account-test bin]$ ./ab -n10000 -c10 \
+-C'MYA::Authenticate_=quality:12568' \
+http://account-test.laserlink.net/scripts/Plan/show
+
+This is ApacheBench, Version 1.3c <$Revision: 1.38 $> apache-1.3
+Copyright (c) 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Copyright (c) 1998-1999 The Apache Group, http://www.apache.org/
+
+Server Software:        Apache/1.3.12                                      
+Server Hostname:        account-test.laserlink.net
+Server Port:            80
+
+Document Path:          /scripts/Plan/show
+Document Length:        8703 bytes
+
+Concurrency Level:      10
+Time taken for tests:   725.533 seconds
+Complete requests:      10000
+Failed requests:        0
+Total transferred:      88540000 bytes
+HTML transferred:       87030000 bytes
+Requests per second:    13.78
+Transfer rate:          122.03 kb/s received
+
+Connnection Times (ms)
+              min   avg   max
+Connect:        0     0   263
+Processing:    91   724  2072
+Total:         91   724  2335

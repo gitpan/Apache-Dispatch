@@ -12,7 +12,7 @@ sub dispatch_baz {
 }
 
 sub post_dispatch {
-  my $class = shift;
+  my $self = shift;
   my $r = shift;
   # delay printing headers until all processing is done
   $r->send_http_header('text/plain');
