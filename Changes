@@ -1,7 +1,7 @@
 Revision history for Perl extension Apache::Dispatch
 
 0.01  7.28.2000
-	- original version
+        - original version
         - many kudos and thanks to:
             Vivek Khera
             Matt Sergeant
@@ -26,3 +26,8 @@ Revision history for Perl extension Apache::Dispatch
         - updated documentation
         - more kudos to Matt Sergeant for invaluable insight
 
+0.04  8.8.2000
+        - fixed bug to allow null DispatchExtras directive
+        - cleaned up Makefile.PL
+        - borrowed from Apache::StatINC and added DispatchStat 
+          directive (suggested by Matt Sergeant and Dan Campbell)

@@ -25,11 +25,11 @@ my @directives = (
     req_override => 'RSRC_CONF | ACCESS_CONF', },
 
   #------------------------------------------------------------------
-  # DispatchIndex enables dispatch_index for index processing
+  # DispatchStat enables module reloading
   #------------------------------------------------------------------
-  { name         => 'DispatchIndex',
-    errmsg       => 'On or Off',
-    args_how     => 'FLAG',
+  { name         => 'DispatchStat',
+    errmsg       => 'choose one of On, Off, or ISA',
+    args_how     => 'TAKE1',
     req_override => 'RSRC_CONF | ACCESS_CONF', },
 );
 

@@ -9,20 +9,22 @@ httpd.conf:
   PerlModule Apache::Dispatch
   PerlModule Bar
 
+  DispatchExtras Pre Post Error
+  DispatchStat On
+
   <Location /Foo>
     SetHandler perl-script
     PerlHandler Apache::Dispatch
 
     DispatchPrefix Bar
-    DispatchExtras Pre Post Error
   </Location>
 
 DESCRIPTION
 
 Apache::Dispatch translates $r->uri into a class and method and runs
 it as a PerlHandler.  Basically, this allows you to call PerlHandlers
-as you would CGI scripts - directly from the browser - without having
-to load your httpd.conf with a slurry of <Location> tags.
+as you would CGI scripts without having to load your httpd.conf with
+a slurry of <Location> tags.
 
 =head1 EXAMPLE
 
@@ -60,8 +62,8 @@ CONFIGURATION DIRECTIVES
     uri.  Applies on a per-location basis only.  
 
   DispatchExtras
-    A list of extra processing to enable per-request.  They may be
-    applied on a per-server or per-location basis.  If the main
+    An optional list of extra processing to enable per-request.  They
+    may be applied on a per-server or per-location basis.  If the main
     handler is not a valid method call, the request is declined prior
     to the execution of any of the extra methods.
 
@@ -75,6 +77,25 @@ CONFIGURATION DIRECTIVES
               Foo->error_dispatch() is called and return status of it
               is returned instead.  Without this feature, the return
               status of your handler is returned.
+
+  DispatchStat
+    An optional directive that enables reloading of the module
+    resulting from the uri to class translation, similar to
+    Apache::Registry or Apache::StatINC.  It applies on a per-server
+    or per-location basis and defaults to Off.  Although the same
+    functionality is available with Apache::StatINC for development
+    DispatchStat does not check all of the modules in %INC.  This cuts
+    down on overhead, making it a reasonable alternative to recycling
+    the server in production.
+
+      On    - Test the called package for modification and reload
+              on change
+
+      Off   - Do not test the package
+
+      ISA   - Test the called package and all other packages in the
+              called packages @ISA and reload on change
+
 
 SPECIAL CODING GUIDELINES
 
@@ -93,9 +114,8 @@ or get the Apache request object yourself via
     my $r = Apache->request;
   }
 
-This also has the interesting side effect which would allow you to
-define, say, a base error_dispatch() method in Foo which is then
-inherited by Foo::Bar, but overriden in Foo::Bar::Baz.
+This also has the interesting side effect of allowing for inheritance
+on a per-location basis.
 
 NOTES
 
@@ -130,11 +150,12 @@ properly.
 
 FEATURES/BUGS
 
-No known bugs or unexpected features at this time...
+If a module fails reload under DispatchStat, Apache::Dispatch declines
+the request.
 
 SEE ALSO
 
-perl(1), mod_perl(1), Apache(3)
+perl(1), mod_perl(1), Apache(3), Apache::StatINC(3)
 
 AUTHOR
 

@@ -9,10 +9,15 @@ package Apache::Dispatch;
 use Apache::Constants qw( OK DECLINED SERVER_ERROR);
 use Apache::Log;
 use Apache::ModuleConfig;
+use Apache::Symbol qw(undef_functions);
 use DynaLoader ();
 use strict;
 
-$Apache::Dispatch::VERSION = '0.03';
+$Apache::Dispatch::VERSION = '0.04';
+
+# create hash to hold the modification times of the modules
+# and mark the time this module was loaded
+my %stat           = ();
 
 if ($ENV{MOD_PERL}) {
   no strict;
@@ -66,10 +71,11 @@ sub handler {
 
   if ($Apache::Dispatch::DEBUG > 1) {
     $log->info("\tapplying the following dispatch rules:" . 
-       "\n\t\tDispatchPrefix: " . $dcfg->{_prefix} .
-       "\n\t\tDispatchExtras: " . 
-         ($dcfg->{_extras} ? (join ' ', @{$dcfg->{_extras}}) : 
-         ($scfg->{_extras} ? (join ' ', @{$scfg->{_extras}}) : "None"))
+      "\n\t\tDispatchPrefix: " . $dcfg->{_prefix} .
+      "\n\t\tDispatchStat: " . ($dcfg->{_stat} || $scfg->{_stat}) .
+      "\n\t\tDispatchExtras: " . 
+       ($dcfg->{_extras} ? (join ' ', @{$dcfg->{_extras}}) : 
+       ($scfg->{_extras} ? (join ' ', @{$scfg->{_extras}}) : "None"))
     );
   } 
 
@@ -82,6 +88,40 @@ sub handler {
   my $object       = {};
 
   bless $object, $class;
+
+#---------------------------------------------------------------------
+# reload the module if DispatchStat On or ISA
+#---------------------------------------------------------------------
+  
+  my $stat = $dcfg->{_stat} || $scfg->{_stat};
+
+  if ($stat eq "ON") {
+    $rc = _stat($class, $log);
+
+    unless ($rc) {
+      $log->error("\tDispatchStat did not return successfully!");
+      $log->info("Exiting Apache::Dispatch");
+      return DECLINED;
+    }
+  }
+  elsif ($stat eq "ISA") {
+    # turn off strict here so we can get at the class's @ISA
+    no strict 'refs';
+
+    # add the current class to the list of those to check
+    my @packages = @{"${class}::ISA"};
+    push @packages, $class;
+
+    foreach my $package (@packages) {
+      $rc = _stat($package, $log);
+
+      unless ($rc) {
+        $log->error("\tDispatchStat did not return successfully!");
+        $log->info("Exiting Apache::Dispatch");
+        return DECLINED;
+      }
+    }
+  }
 
 #---------------------------------------------------------------------
 # see if the handler is a valid method
@@ -105,9 +145,8 @@ sub handler {
 # since the uri is dispatchable, check each of the extras
 #---------------------------------------------------------------------
 
-  my @extras  = $dcfg->{_extras} ? 
-                  @{$dcfg->{_extras}} : 
-                  @{$scfg->{_extras}};
+  my @extras  = $dcfg->{_extras} ? @{$dcfg->{_extras}} :
+                $scfg->{_extras} ? @{$scfg->{_extras}} : undef;
 
   foreach my $extra (@extras) {
     if ($extra eq "PRE") {
@@ -206,6 +245,64 @@ sub _check_dispatch {
   return $coderef;  
 }
 
+sub _stat {
+#---------------------------------------------------------------------
+# stat the module to see if it has changed...
+# this method is for internal use only
+#---------------------------------------------------------------------
+
+  my ($class, $log) = @_;
+
+  # we sometimes get Argument isn't numeric warnings, but things
+  # still seem to work ok, so turn off warnings for now...
+  local $^W;
+
+  (my $module = $class) =~ s!::!/!;
+
+  $module          = "$module.pm";
+
+  $stat{$module} = $^T unless $stat{$module};
+
+  if ($INC{$module}) {
+    $log->info("\tchecking $module for reload in pid $$")
+      if $Apache::Dispatch::DEBUG > 1;
+
+    my $mtime = (stat $INC{$module})[9];
+
+    unless (defined $mtime && $mtime) {
+    $log->info("\tcannot find $module!")
+      if $Apache::Dispatch::DEBUG;
+    return 1;
+    }
+  
+    if ( $mtime > $stat{$module} ) {
+      $class->Apache::Symbol::undef_functions;
+
+      delete $INC{$module};
+      eval { require $module };
+  
+      if ($@) {
+        $log->error("\t$module reload failed! $@");
+        return undef;
+      }
+      elsif ($Apache::Dispatch::DEBUG) {
+        $log->info("\t$module reloaded for pid $$...")
+      }
+      $stat{$module} = $mtime;
+    }
+    else {
+      $log->info("\t$module not modified in pid $$")
+        if $Apache::Dispatch::DEBUG > 1;
+
+    }
+  }
+  else {
+    $log->error("\t$module not in \%INC!");
+  }
+
+  return 1;
+}
+
 
 # configuration methods
 
@@ -224,6 +321,8 @@ sub SERVER_MERGE {
   my ($parent, $current) = @_;
   my %new = (%$parent, %$current);
 
+  $new{_stat} ||= "OFF";   # no stat() by default;
+
   return bless \%new, ref($parent);
 }
 
@@ -237,6 +336,8 @@ sub DIR_CREATE {
 sub DIR_MERGE {
   my ($parent, $current) = @_;
   my %new = (%$parent, %$current);
+
+  $new{_stat} ||= "OFF";   # no stat() by default;
 
   return bless \%new, ref($parent);
 }
@@ -261,6 +362,18 @@ sub DispatchExtras ($$@) {
   }
 }
 
+sub DispatchStat ($$$) {
+  my ($cfg, $parms, $arg) = @_;
+  my $scfg = Apache::ModuleConfig->get($parms->server);
+  
+  if ($arg =~ m/^On|Off|ISA$/i) {
+    $cfg->{_stat} = $scfg->{_stat} = uc($arg);
+  } 
+  else {
+    die "Invalid DispatchStat $arg!";
+  }
+}
+
 1;
 
 __END__
@@ -276,20 +389,22 @@ httpd.conf:
   PerlModule Apache::Dispatch
   PerlModule Bar
 
+  DispatchExtras Pre Post Error
+  DispatchStat On
+
   <Location /Foo>
     SetHandler perl-script
     PerlHandler Apache::Dispatch
 
     DispatchPrefix Bar
-    DispatchExtras Pre Post Error
   </Location>
 
 =head1 DESCRIPTION
 
 Apache::Dispatch translates $r->uri into a class and method and runs
 it as a PerlHandler.  Basically, this allows you to call PerlHandlers
-as you would CGI scripts - directly from the browser - without having
-to load your httpd.conf with a slurry of <Location> tags.
+as you would CGI scripts without having to load your httpd.conf with
+a slurry of <Location> tags.
 
 =head1 EXAMPLE
 
@@ -327,8 +442,8 @@ Bar::Baz, etc...
     uri.  Applies on a per-location basis only.  
 
   DispatchExtras
-    A list of extra processing to enable per-request.  They may be
-    applied on a per-server or per-location basis.  If the main
+    An optional list of extra processing to enable per-request.  They
+    may be applied on a per-server or per-location basis.  If the main
     handler is not a valid method call, the request is declined prior
     to the execution of any of the extra methods.
 
@@ -342,6 +457,25 @@ Bar::Baz, etc...
               Foo->error_dispatch() is called and return status of it
               is returned instead.  Without this feature, the return
               status of your handler is returned.
+
+  DispatchStat
+    An optional directive that enables reloading of the module
+    resulting from the uri to class translation, similar to
+    Apache::Registry or Apache::StatINC.  It applies on a per-server
+    or per-location basis and defaults to Off.  Although the same
+    functionality is available with Apache::StatINC for development
+    DispatchStat does not check all of the modules in %INC.  This cuts
+    down on overhead, making it a reasonable alternative to recycling
+    the server in production.
+
+      On    - Test the called package for modification and reload
+              on change
+
+      Off   - Do not test the package
+
+      ISA   - Test the called package and all other packages in the
+              called packages @ISA and reload on change
+
 
 =head1 SPECIAL CODING GUIDELINES
 
@@ -360,9 +494,8 @@ or get the Apache request object yourself via
     my $r = Apache->request;
   }
 
-This also has the interesting side effect which would allow you to
-define, say, a base error_dispatch() method in Foo which is then
-inherited by Foo::Bar, but overriden in Foo::Bar::Baz.
+This also has the interesting side effect of allowing for inheritance
+on a per-location basis.
 
 =head1 NOTES
 
@@ -397,11 +530,12 @@ properly.
 
 =head1 FEATURES/BUGS
 
-No known bugs or unexpected features at this time...
+If a module fails reload under DispatchStat, Apache::Dispatch declines
+the request.
 
 =head1 SEE ALSO
 
-perl(1), mod_perl(1), Apache(3)
+perl(1), mod_perl(1), Apache(3), Apache::StatINC(3)
 
 =head1 AUTHOR
 
