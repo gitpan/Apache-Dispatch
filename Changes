@@ -16,3 +16,13 @@ Revision history for Perl extension Apache::Dispatch
               behind a dispatch_ prepend
         - changed behavior of directory and server merges
         - updated the documentation
+
+0.03  8.4.2000
+        - complete API and internal rewrite
+            o added DispatchExtras and DispatchPrefix directive
+            o removed per-server configurations
+            o added new pre_dispatch, post_dispatch, error_dispatch
+              and dispatch_index method tie-ins
+        - updated documentation
+        - more kudos to Matt Sergeant for invaluable insight
+

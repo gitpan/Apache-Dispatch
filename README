@@ -7,17 +7,14 @@ SYNOPSIS
 httpd.conf:
 
   PerlModule Apache::Dispatch
-  PerlFixupHandler Apache::Dispatch
-
-  DispatchMode Safe
-  DispatchMethod Handler
-  DispatchAllow Custom
-  DispatchDeny Apache Protected
+  PerlModule Bar
 
   <Location /Foo>
-    PerlModule Bar
-    DispatchBase Bar
-    DispatchMethod Prefix
+    SetHandler perl-script
+    PerlHandler Apache::Dispatch
+
+    DispatchPrefix Bar
+    DispatchExtras Pre Post Error
   </Location>
 
 DESCRIPTION
@@ -27,113 +24,87 @@ it as a PerlHandler.  Basically, this allows you to call PerlHandlers
 as you would CGI scripts - directly from the browser - without having
 to load your httpd.conf with a slurry of <Location> tags.
 
-EXAMPLE
+=head1 EXAMPLE
 
-there are two ways of configuring Apache::Dispatch:
-
-per-server:
-  in httpd.conf:
-
-    PerlModule Apache::Dispatch
-    PerlFixupHandler Apache::Dispatch
-
-    DispatchMode Safe
-    DispatchMethod Handler
-    DispatchAllow Test
-
-  in browser:
-    http://localhost/Foo
-
-  the results are the same as if your httpd.conf looked like:
-    <Location /Foo>
-       SetHandler perl-script
-       PerlHandler Foo
-    </Location>
-
-per-location:
   in httpd.conf
 
     PerlModule Apache::Dispatch
     PerlModule Bar
 
     <Location /Foo>
-      PerlFixupHandler Apache::Dispatch
-      DispatchBase Bar
-      DispatchMethod Prefix
+      SetHandler perl-script
+      PerlHandler Apache::Dispatch
+
+      DispatchPrefix Bar
     </Location>
 
   in browser:
     http://localhost/Foo/baz
 
-  the results are the same as if your httpd.conf looked like:
+the results are the same as if your httpd.conf looked like:
     <Location /Foo>
        SetHandler perl-script
        PerlHandler Bar::dispatch_baz
     </Location>
 
-  The per-location configuration offers additional security and
-  protection by hiding both the name of the package and method from
-  the browser.  Because any class under the Bar:: hierarchy can be
-  called, one <Location> directive is be able to handle all the
-  methods of Bar, Bar::Baz, etc...
-
+but with the additional security of protecting the class name from
+the browser and keeping the method name from being called directly.
+Because any class under the Bar:: hierarchy can be called, one
+<Location> directive is be able to handle all the methods of Bar,
+Bar::Baz, etc...
 
 CONFIGURATION DIRECTIVES
 
-  DispatchBase  
-    Applies on a per-location basis only.  The base class to be 
-    substituted for the $r->location part of the uri.
+  DispatchPrefix
+    The base class to be substituted for the $r->location part of the
+    uri.  Applies on a per-location basis only.  
 
-  DispatchMethod 
-    Applies on a per-server or per directory basis.  Each directory 
-    or virtual host will inherit the value of the server if it does
-    not specify a method itself.  It accepts the following values:
+  DispatchExtras
+    A list of extra processing to enable per-request.  They may be
+    applied on a per-server or per-location basis.  If the main
+    handler is not a valid method call, the request is declined prior
+    to the execution of any of the extra methods.
 
-      Handler   - Assume the method name is handler(), for example
-                  /Foo/Bar becomes Foo::Bar->handler().
-                  This is the default value outside of <Location>
-                  directives configured with DispatchBase.
+      Pre   - eval()s Foo->pre_dispatch() prior to dispatching the uri
+              uri.  The $@ of the eval is not checked in any way.
 
-      Prefix    - Assume the method name is the last part of the 
-                  uri and prefix dispatch_ to the method name.
-                  /Foo/Bar becomes Foo->dispatch_bar().
-                  This is the default value within <Location>
-                  directives configured with DispatchBase.
+      Post  - eval()s Foo->post_dispatch() prior to dispatching the
+              uri.  The $@ of the eval is not checked.
 
-      Determine - The method may either be handler() or the last part
-                  of the uri prefixed with dispatch_.  The method 
-                  will be determined by first trying dispatch_method()
-                  then by trying handler().
+      Error - If the main handler returns other than OK then 
+              Foo->error_dispatch() is called and return status of it
+              is returned instead.  Without this feature, the return
+              status of your handler is returned.
 
-  DispatchMode    
-    Applies on a per-server basis, except where a <Location> directive
-    is using DispatchBase.  Values of the main server will be inherited
-    by each virtual host.  It accepts the following values:
+SPECIAL CODING GUIDELINES
 
-        Safe    - Allow only those methods whose namespace is 
-                  explicitly allowed by DispatchAllow and explicitly
-                  not denied by DispatchDeny.  This is the default.
+Apache::Dispatch uses object oriented calls behind the scenes.  This 
+means that you either need to account for your handler to be called
+as a method handler, such as
 
-        Brave   - Allow only those methods whose namespace is 
-                  explicitly not denied by DispatchAllow.  This is
-                  primarily intended for development and ought to
-                  work quite nicely with Apache::StatINC.  Its 
-                  security is not guaranteed.
-                  
-  DispatchAllow 
-    A list of namespaces allowed to be dispatched according to the 
-    above DispatchMethod and DispatchMode rules.  Applies on a 
-    per-server basis, except where a <Location> directive is using 
-    DispatchBase.  Values of the main server will be inherited by each
-    virtual host. 
+  sub dispatch_bar {
+    my $class = shift;  # your class
+    my $r = shift;
+  }
 
-  DispatchDeny
-    A list of namespaces denied dispatch according to the above
-    DispatchMethod and DispatchMode rules.  Applies on a per-server
-    basis, except where a <Location> directive is using DispatchBase.
-    Values of the main server will be inherited by each virtual host.
+or get the Apache request object yourself via
+
+  sub dispatch_bar {
+    my $r = Apache->request;
+  }
+
+This also has the interesting side effect which would allow you to
+define, say, a base error_dispatch() method in Foo which is then
+inherited by Foo::Bar, but overriden in Foo::Bar::Baz.
 
 NOTES
+
+In addition to the special methods pre_dispatch(), post_dispatch(),
+and error_dispatch(), if you define dispatch_index() it will be called
+by /Foo or /Foo/.  /Foo/index is always directly callable, but /Foo 
+will only translate to /Foo/index at the highest level - that is,
+when just the location is specified.  Meaning /Foo/Baz/index will call
+Bar::Baz->dispatch_index, but /Foo/Baz will try to call Bar->Baz().
 
 There is no require()ing or use()ing of the packages or methods prior
 to their use as a PerlHandler.  This means that if you try to dispatch
@@ -142,20 +113,8 @@ startup.pl you probably will not meet with much success.  This adds a
 bit of security and reminds us we should be pre-loading that code in
 the parent process anyway...
 
-Apache::Dispatch tries to be a bit intelligent about things.  If, by
-the time it reaches the fixup phase, the uri can be mapped to a real
-file, directory, or <Location> tag (other than one containing a
-DispatchBase directive), Apache::Dispatch declines to handle the
-request.
-
 If the uri can be dispatched but contains anything other than
 [a-zA-Z0-9_/-] Apache::Dispatch declines to handle the request.
-
-DispatchDeny always includes the following namespaces:
-  AUTOLOAD
-  CORE
-  SUPER
-  UNIVERSAL
 
 Like everything in perl, the package names are case sensitive.
 
@@ -165,12 +124,13 @@ information set your apache LogLevel directive above info level.
 
 This is alpha software, and as such has not been tested on multiple
 platforms or environments for security, stability or other concerns.
-It requires PERL_FIXUP=1, PERL_LOG_API=1, PERL_HANDLER=1, and maybe
-other hooks to function properly.
+It requires PERL_DIRECTIVE_HANDLERS=1, PERL_METHOD_HANDLERS=1,
+PERL_LOG_API=1, PERL_HANDLER=1, and maybe other hooks to function 
+properly.
 
 FEATURES/BUGS
 
-No known bugs or features at this time...
+No known bugs or unexpected features at this time...
 
 SEE ALSO
 

@@ -8,56 +8,29 @@ use strict;
 require 5.005;
 
 my @directives = (
-  #-------------------------------------------------------------------
-  # DispatchAllow takes a list of all the namespaces that are
-  # ok to try and dispatch.  It can be general (like Foo) or
-  # specific (like Foo::Bar)
-  #-------------------------------------------------------------------
-  { name         => 'DispatchAllow',
-    errmsg       => 'namespaces allowed execution', 
-    args_how     => 'ITERATE',
-    req_override => 'RSRC_CONF', },
-
-  #-------------------------------------------------------------------
-  # DispatchDeny is used to _extend_ the namespaces of disallowed
-  # dispatches.
-  #-------------------------------------------------------------------
-  { name         => 'DispatchDeny',
-    errmsg       => 'namespaces denied execution', 
-    args_how     => 'ITERATE',
-    req_override => 'RSRC_CONF', },
-
-  #-------------------------------------------------------------------
-  # DispatchMode controls the safety level of the dispatcher
-  # Safe:    dispatch only those methods whose namespace is
-  #          specified by DispatchAllow and whose namespace is
-  #          not one of those denied execution by DispatchDeny 
-  #          internal directives
-  # Brave:   dispatch any method except those with namespaces
-  #          disallowed by DispatchDeny and internal directives
-  #-------------------------------------------------------------------
-  { name         => 'DispatchMode',
-    errmsg       => 'choose one of: Safe or Brave', 
-    args_how     => 'TAKE1',
-    req_override => 'RSRC_CONF', },
-
   #------------------------------------------------------------------
-  # DispatchMethod tries to avoid overhead by allowing the user
-  # to specify whether to always imply Class->handler, or 
-  # Class->method, or to determine it on its own
+  # DispatchPrefix defines the base class for a given <Location>
   #------------------------------------------------------------------
-  { name         => 'DispatchMethod',
-    errmsg       => 'choose one of: Handler, Prefix, or Determine', 
-    args_how     => 'TAKE1',
-    req_override => 'RSRC_CONF | ACCESS_CONF', },
-
-  #------------------------------------------------------------------
-  # DispatchBase defines the base class for a given <Location>
-  #------------------------------------------------------------------
-  { name         => 'DispatchBase',
+  { name         => 'DispatchPrefix',
     errmsg       => 'define a class to be used as the base class', 
     args_how     => 'TAKE1',
     req_override => 'ACCESS_CONF', },
+
+  #------------------------------------------------------------------
+  # DispatchExtras defines the extra dispatch methods to enable
+  #------------------------------------------------------------------
+  { name         => 'DispatchExtras',
+    errmsg       => 'choose any of: Pre, Post, Error, or Index', 
+    args_how     => 'ITERATE',
+    req_override => 'RSRC_CONF | ACCESS_CONF', },
+
+  #------------------------------------------------------------------
+  # DispatchIndex enables dispatch_index for index processing
+  #------------------------------------------------------------------
+  { name         => 'DispatchIndex',
+    errmsg       => 'On or Off',
+    args_how     => 'FLAG',
+    req_override => 'RSRC_CONF | ACCESS_CONF', },
 );
 
 command_table(\@directives);
