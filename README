@@ -43,10 +43,10 @@ EXAMPLE
   in browser:
     http://localhost/Foo/baz
 
-the results are the same as if your httpd.conf looked like:
+  the results are the same as if your httpd.conf looked like:
     <Location /Foo>
-       SetHandler perl-script
-       PerlHandler Bar::dispatch_baz
+      SetHandler perl-script
+      PerlHandler Bar::dispatch_baz
     </Location>
 
 but with the additional security of protecting the class name from
@@ -67,16 +67,16 @@ CONFIGURATION DIRECTIVES
     handler is not a valid method call, the request is declined prior
     to the execution of any of the extra methods.
 
-      Pre   - eval()s Foo->pre_dispatch() prior to dispatching the uri
+      Pre   - eval()s Foo->pre_dispatch($r) prior to dispatching the
               uri.  The $@ of the eval is not checked in any way.
 
-      Post  - eval()s Foo->post_dispatch() prior to dispatching the
-              uri.  The $@ of the eval is not checked.
+      Post  - eval()s Foo->post_dispatch($r) prior to dispatching the
+              uri.  The $@ of the eval is not checked in any way.
 
       Error - If the main handler returns other than OK then 
-              Foo->error_dispatch() is called and return status of it
-              is returned instead.  Without this feature, the return
-              status of your handler is returned.
+              Foo->error_dispatch($r, $@) is called and return status
+              of it is returned instead.  Without this feature, the
+              return status of your handler is returned.
 
   DispatchStat
     An optional directive that enables reloading of the module
@@ -88,13 +88,13 @@ CONFIGURATION DIRECTIVES
     down on overhead, making it a reasonable alternative to recycling
     the server.
 
-      On    - Test the called package for modification and reload
-              on change
+      On    - Test the called package for modification and reload on
+              change
 
       Off   - Do not test or reload the package
 
-      ISA   - Test the called package and all other packages in the
-              called package's @ISA and reload on change
+      ISA   - Test the called package, and all other packages in the
+              called package's @ISA, and reload on change
 
 SPECIAL CODING GUIDELINES
 
@@ -112,9 +112,6 @@ or get the Apache request object yourself via
   sub dispatch_bar {
     my $r = Apache->request;
   }
-
-This also has the interesting side effect of allowing for inheritance
-on a per-location basis.
 
 NOTES
 

@@ -33,5 +33,11 @@ Revision history for Perl extension Apache::Dispatch
           directive (suggested by Matt Sergeant and Dan Campbell)
 
 0.05  8.11.2000
-        - make several changes to _stat - should be more stable now
+        - made several changes to _stat - should be more stable now
         - added AUTOLOAD support
+
+0.06  8.29.2000
+        - changed call to error_dispatch to pass $r and $@
+        - documented the arguments passed to the extras
+        - log the error if the handler dies and there is no 
+          error_dispatch() routine defined

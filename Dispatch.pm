@@ -12,7 +12,7 @@ use Apache::ModuleConfig;
 use DynaLoader ();
 use strict;
 
-$Apache::Dispatch::VERSION = '0.05';
+$Apache::Dispatch::VERSION = '0.06';
 
 # create global hash to hold the modification times of the modules
 my %stat           = ();
@@ -39,7 +39,7 @@ sub handler {
 
   my $uri          = $r->uri;
   
-  my ($prehandler, $posthandler, $errorhandler, $rc) = undef;
+  my ($prehandler, $posthandler, $errorhandler, $rc);
 
 #---------------------------------------------------------------------
 # do some preliminary stuff...
@@ -63,10 +63,10 @@ sub handler {
   my $scfg         = Apache::ModuleConfig->get($r->server);
 
   if ($Apache::Dispatch::DEBUG > 1) {
-    $log->info("\tapplying the following dispatch rules:" . 
-      "\n\t\tDispatchPrefix: " . $dcfg->{_prefix} .
-      "\n\t\tDispatchStat: " . ($dcfg->{_stat} || $scfg->{_stat}) .
-      "\n\t\tDispatchExtras: " . 
+    $log->info("\tapplying the following dispatch rules:",
+      "\n\t\tDispatchPrefix: ", $dcfg->{_prefix},
+      "\n\t\tDispatchStat: ", ($dcfg->{_stat} || $scfg->{_stat}),
+      "\n\t\tDispatchExtras: ",
        ($dcfg->{_extras} ? (join ' ', @{$dcfg->{_extras}}) : 
        ($scfg->{_extras} ? (join ' ', @{$scfg->{_extras}}) : "None"))
     );
@@ -139,7 +139,7 @@ sub handler {
 #---------------------------------------------------------------------
 
   my @extras  = $dcfg->{_extras} ? @{$dcfg->{_extras}} :
-                $scfg->{_extras} ? @{$scfg->{_extras}} : undef;
+                $scfg->{_extras} ? @{$scfg->{_extras}} : "";
 
   foreach my $extra (@extras) {
     if ($extra eq "PRE") {
@@ -163,9 +163,11 @@ sub handler {
   eval { $rc = $object->$handler($r) };
 
   if ($errorhandler && ($@ || $rc != OK)) {
-    $rc = $object->$errorhandler($r);
+    # if the error handler dies we want to catch it, so don't eval
+    $rc = $object->$errorhandler($r, $@);
   } 
   elsif ($@) {
+    $log->error("$class->$method died: $@");
     $rc = SERVER_ERROR;
   }
 
@@ -207,6 +209,7 @@ sub _translate_uri {
   $class_and_method  =~ s/^$location/$prefix/e;
 
   # change that last :: to a ->
+  # prefix method with dispatch_
   $class_and_method  =~ s/(.*)::([^:]+)+/$1\->dispatch_$2/;
 
   my ($class, $method) = split /->/, $class_and_method;
@@ -414,10 +417,10 @@ a slurry of <Location> tags.
   in browser:
     http://localhost/Foo/baz
 
-the results are the same as if your httpd.conf looked like:
+  the results are the same as if your httpd.conf looked like:
     <Location /Foo>
-       SetHandler perl-script
-       PerlHandler Bar::dispatch_baz
+      SetHandler perl-script
+      PerlHandler Bar::dispatch_baz
     </Location>
 
 but with the additional security of protecting the class name from
@@ -438,16 +441,16 @@ Bar::Baz, etc...
     handler is not a valid method call, the request is declined prior
     to the execution of any of the extra methods.
 
-      Pre   - eval()s Foo->pre_dispatch() prior to dispatching the uri
+      Pre   - eval()s Foo->pre_dispatch($r) prior to dispatching the
               uri.  The $@ of the eval is not checked in any way.
 
-      Post  - eval()s Foo->post_dispatch() prior to dispatching the
-              uri.  The $@ of the eval is not checked.
+      Post  - eval()s Foo->post_dispatch($r) prior to dispatching the
+              uri.  The $@ of the eval is not checked in any way.
 
       Error - If the main handler returns other than OK then 
-              Foo->error_dispatch() is called and return status of it
-              is returned instead.  Without this feature, the return
-              status of your handler is returned.
+              Foo->error_dispatch($r, $@) is called and return status
+              of it is returned instead.  Without this feature, the
+              return status of your handler is returned.
 
   DispatchStat
     An optional directive that enables reloading of the module
@@ -459,13 +462,13 @@ Bar::Baz, etc...
     down on overhead, making it a reasonable alternative to recycling
     the server.
 
-      On    - Test the called package for modification and reload
-              on change
+      On    - Test the called package for modification and reload on
+              change
 
       Off   - Do not test or reload the package
 
-      ISA   - Test the called package and all other packages in the
-              called package's @ISA and reload on change
+      ISA   - Test the called package, and all other packages in the
+              called package's @ISA, and reload on change
 
 =head1 SPECIAL CODING GUIDELINES
 
@@ -483,9 +486,6 @@ or get the Apache request object yourself via
   sub dispatch_bar {
     my $r = Apache->request;
   }
-
-This also has the interesting side effect of allowing for inheritance
-on a per-location basis.
 
 =head1 NOTES
 
