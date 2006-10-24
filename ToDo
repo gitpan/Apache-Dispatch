@@ -1,5 +1,9 @@
 cache method calls as valid methods if seen previously to avoid can()
-overhead?
+overhead?  Turns out that this is _much_ slower than just letting
+perl handle it (by about 30% - ack)
+
+make class/method available to pre/post/error handlers
+  Tatsuhiko Miyagawa
 
 test suite
 
@@ -26,7 +30,7 @@ using a single <Location> directive with a method handler
 -C'MYA::Authenticate_=quality:12568' \
 http://account-test.laserlink.net/test
 
-This is ApacheBench, Version 1.3c <$Revision: 1.38 $> apache-1.3
+This is ApacheBench, Version 1.3c <$Revision: 1.2 $> apache-1.3
 Copyright (c) 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
 Copyright (c) 1998-1999 The Apache Group, http://www.apache.org/
 
@@ -59,7 +63,7 @@ using Apache::Dispatch with DispatchISA On
 -C'MYA::Authenticate_=quality:12568' \
 http://account-test.laserlink.net/scripts/Plan/show
 
-This is ApacheBench, Version 1.3c <$Revision: 1.38 $> apache-1.3
+This is ApacheBench, Version 1.3c <$Revision: 1.2 $> apache-1.3
 Copyright (c) 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
 Copyright (c) 1998-1999 The Apache Group, http://www.apache.org/
 

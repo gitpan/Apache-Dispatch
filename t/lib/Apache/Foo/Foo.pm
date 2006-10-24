@@ -74,7 +74,7 @@ sub AUTOLOAD {
 
   if $AUTOLOAD =~ m/dispatch_baz/ {
     $r->print("method $AUTOLOAD was declared!");
-    return OK
+    return OK;
   }
 
   $r->send_http_header('text/plain');
