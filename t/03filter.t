@@ -1,7 +1,7 @@
 use strict;
 use warnings FATAL => 'all';
 
-use Apache::Test qw(ok plan :withtestmore );
+use Apache::Test qw( -withtestmore );
 use Apache::TestRequest qw(GET);
 
 # figure out what version of apache we have we have
@@ -28,4 +28,4 @@ my $url = '/filtered/foo';
 
 my $res = GET $url;
 ok( $res->is_success );
-ok( $res->content =~ m/dispatchfoo/i );
+like( $res->content, qr/dispatch_foo/i, 'content like dispatch_foo' );
