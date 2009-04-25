@@ -4,6 +4,7 @@
 	</IfDefine>
 	<IfDefine APACHE1>
 		PerlModule Apache::Dispatch
+		PerlModule Apache::Log
 	</IfDefine>
 
 	<Location />
